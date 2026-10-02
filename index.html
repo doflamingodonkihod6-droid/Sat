@@ -4,6 +4,9 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Vocabify — SAT/IELTS Vocabulary Trainer</title>
+<meta name="description" content="Learn SAT and IELTS vocabulary with flashcards, matching, speed rounds, tests and a full-length mock exam." />
+<meta name="theme-color" content="#2563eb" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📘</text></svg>" />
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
@@ -24,6 +27,10 @@
     background-color: #f8fafc;
     font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
     -webkit-font-smoothing: antialiased;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
   }
 
   .font-display { font-family: 'Lexend', 'Inter', ui-sans-serif, sans-serif; }
@@ -232,6 +239,49 @@ function saveProgress(progress) {
 // ---------------------------------------------------------------------------
 // Small presentational helpers
 // ---------------------------------------------------------------------------
+
+const ACT_KEY = "vocabify_activity_v1";
+function dayKey(d = new Date()) {
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+function loadActivity() {
+  try { return JSON.parse(localStorage.getItem(ACT_KEY)) || {}; } catch (e) { return {}; }
+}
+function recordActivity() {
+  try {
+    const a = loadActivity(); const k = dayKey();
+    a[k] = (a[k] || 0) + 1;
+    localStorage.setItem(ACT_KEY, JSON.stringify(a));
+  } catch (e) {}
+}
+function computeStreak(a) {
+  const d = new Date(); let n = 0;
+  if (!a[dayKey(d)]) d.setDate(d.getDate() - 1); // an unstarted today doesn't break the streak
+  while (a[dayKey(d)]) { n++; d.setDate(d.getDate() - 1); }
+  return n;
+}
+function speakWord(text) {
+  try {
+    if (!("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "en-US"; u.rate = 0.9;
+    window.speechSynthesis.speak(u);
+  } catch (e) {}
+}
+function SpeakButton({ word, className = "" }) {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return null;
+  return (
+    <button
+      type="button"
+      aria-label={"Hear how to say " + word}
+      onClick={(e) => { e.stopPropagation(); e.currentTarget.blur(); speakWord(word); }}
+      className={classNames("inline-flex items-center justify-center w-8 h-8 rounded-full text-slate-400 hover:text-blue-600 hover:bg-blue-50 focus-ring transition", className)}
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><path d="M11 5 6 9H3v6h3l5 4V5z" /><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" /></svg>
+    </button>
+  );
+}
 
 function classNames(...xs) {
   return xs.filter(Boolean).join(" ");
@@ -539,10 +589,14 @@ function PackageCard({ pkg, progress, onOpen, index }) {
   );
 }
 
-function Dashboard({ data, progress, onOpenPackage, onOpenMock }) {
+function Dashboard({ data, progress, onOpenPackage, onOpenMock, onReview }) {
   const mockState = mockSummary();
   const totalWords = data.packages.reduce((s, p) => s + p.totalWords, 0);
   const totalMastered = data.packages.reduce((s, p) => s + computePackageStats(p, progress).mastered, 0);
+  const act = loadActivity();
+  const streak = computeStreak(act);
+  const today = act[dayKey()] || 0;
+  const weakCount = data.packages.reduce((s, p) => s + p.sets.reduce((t, st) => t + st.words.filter((w) => progress[w.id] === "learning").length, 0), 0);
 
   return (
     <div className="max-w-6xl mx-auto px-5 sm:px-8 py-10">
@@ -553,6 +607,21 @@ function Dashboard({ data, progress, onOpenPackage, onOpenMock }) {
         <p className="text-slate-500 text-[15px]">
           {totalMastered} of {totalWords} words mastered across all {data.packages.length} packages. Pick a set below to keep going.
         </p>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8 animate-in">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5">
+          <p className="font-display font-extrabold text-3xl text-slate-900">{streak}<span className="text-base font-semibold text-slate-400 ml-1.5">{streak === 1 ? "day" : "days"}</span></p>
+          <p className="text-sm text-slate-500 mt-1">{streak ? "Study streak. Review a word today to extend it." : "Review a word today to start a streak."}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-5">
+          <p className="font-display font-extrabold text-3xl text-slate-900">{today}<span className="text-base font-semibold text-slate-400 ml-1.5">{today === 1 ? "word" : "words"}</span></p>
+          <p className="text-sm text-slate-500 mt-1">Reviewed today.</p>
+        </div>
+        <button onClick={onReview} disabled={!weakCount} className="text-left rounded-2xl border border-slate-200 bg-white p-5 hover:border-blue-400 transition disabled:opacity-60 disabled:hover:border-slate-200 focus-ring">
+          <p className="font-display font-extrabold text-3xl text-slate-900">{weakCount}<span className="text-base font-semibold text-slate-400 ml-1.5">still learning</span></p>
+          <p className="text-sm text-slate-500 mt-1">{weakCount ? "Start a flashcard review of up to 20 of them." : "Words you miss will show up here."}</p>
+        </button>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
@@ -696,6 +765,7 @@ function WordRow({ w, status, index }) {
       <div className="sm:w-44 shrink-0 flex items-center gap-2">
         <span className="font-display font-bold text-slate-900 text-[15px]">{w.word}</span>
         <PosTag pos={w.pos} />
+        <SpeakButton word={w.word} />
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-sm text-slate-700 leading-relaxed">{w.definition}</p>
@@ -907,6 +977,7 @@ function FlashcardMode({ setObj, progress, onUpdateStatus, onExit }) {
             <h2 className="font-display font-extrabold text-4xl sm:text-5xl letter-tighter text-slate-900 mb-6 break-words">
               {currentWord.word}
             </h2>
+            <SpeakButton word={currentWord.word} className="mb-3 -mt-3" />
             <div className="inline-flex items-center gap-2 text-sm font-semibold text-slate-400 mt-2">
               <IconRotate className="w-4 h-4" />
               Flip for definition
@@ -1916,11 +1987,20 @@ function App() {
   useEffect(() => { saveProgress(progress); }, [progress]);
 
   const updateStatus = useCallback((wordId, status) => {
+    recordActivity();
     setProgress((p) => ({ ...p, [wordId]: status }));
   }, []);
 
   const findPackage = (pkgId) => RAW_DATA.packages.find((p) => p.id === pkgId);
 
+  function startReview() {
+    const words = [];
+    RAW_DATA.packages.forEach((p) => p.sets.forEach((st) => st.words.forEach((w) => { if (progress[w.id] === "learning") words.push(w); })));
+    if (!words.length) return;
+    const picked = shuffleArray(words).slice(0, 20);
+    setView({ screen: "study", pkgId: "review", mode: "flashcard", setObj: { id: "review", index: "Review", name: "Weak words review", words: picked } });
+    window.scrollTo({ top: 0 });
+  }
   function goDashboard() { setView({ screen: "dashboard" }); window.scrollTo({top:0}); }
   function openMock() { setView({ screen: "mock" }); window.scrollTo({top:0}); }
   function openPackage(pkgId) { setView({ screen: "setlist", pkgId }); window.scrollTo({top:0}); }
@@ -1960,12 +2040,16 @@ function App() {
     ];
   }
 
+  if (view.screen === "study" && view.pkgId === "review") {
+    breadcrumbs = [{ label: "Packages", onClick: goDashboard }, { label: "Weak words review", onClick: null }];
+  }
+
   return (
     <div className="min-h-screen bg-noise-blue">
       <Header onLogoClick={goDashboard} breadcrumbs={breadcrumbs} />
 
       {view.screen === "dashboard" && (
-        <Dashboard data={RAW_DATA} progress={progress} onOpenPackage={openPackage} onOpenMock={openMock} />
+        <Dashboard data={RAW_DATA} progress={progress} onOpenPackage={openPackage} onOpenMock={openMock} onReview={startReview} />
       )}
 
       {view.screen === "mock" && <MockExam onExit={goDashboard} />}
@@ -1990,7 +2074,7 @@ function App() {
           setObj={view.setObj}
           progress={progress}
           onUpdateStatus={updateStatus}
-          onExit={() => backToOverview(view.pkgId, view.setObj)}
+          onExit={() => (view.pkgId === "review" ? goDashboard() : backToOverview(view.pkgId, view.setObj))}
         />
       )}
 
