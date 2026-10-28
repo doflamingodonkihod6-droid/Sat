@@ -11,6 +11,7 @@
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.7/babel.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Lexend:wght@500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -596,7 +597,7 @@ function PackageCard({ pkg, progress, onOpen, index }) {
   );
 }
 
-function Dashboard({ data, progress, onOpenPackage, onOpenMock, onOpenReading, onReview }) {
+function Dashboard({ data, progress, onOpenPackage, onOpenMock, onOpenReading, onOpenBattle, onReview }) {
   const mockState = mockSummary();
   const reading = readingStats(readingLoad());
   const totalWords = data.packages.reduce((s, p) => s + p.totalWords, 0);
@@ -658,6 +659,17 @@ function Dashboard({ data, progress, onOpenPackage, onOpenMock, onOpenReading, o
           <p className="text-sm text-slate-500">{reading.total} real SAT questions with answer key, tips and timing.{reading.answered ? " " + reading.answered + " answered, " + reading.correct + " correct." : ""}</p>
         </div>
         <span className="text-sm font-semibold text-blue-600 shrink-0">{reading.answered && reading.answered < reading.total ? "Continue" : "Open"} &rarr;</span>
+      </button>
+
+      <button onClick={onOpenBattle} className="mt-4 w-full text-left rounded-2xl border border-slate-200 bg-white p-6 flex items-center gap-4 hover:border-rose-400 hover:shadow-sm transition animate-in focus-ring">
+        <div className="w-11 h-11 rounded-xl bg-rose-50 flex items-center justify-center text-rose-600 shrink-0">
+          <IconBolt className="w-5 h-5" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="font-display font-bold text-slate-900">Battle arena</p>
+          <p className="text-sm text-slate-500">Play live against friends. Share a room code and race through vocabulary questions together.</p>
+        </div>
+        <span className="text-sm font-semibold text-blue-600 shrink-0">Play &rarr;</span>
       </button>
 
       <div className="mt-10 rounded-2xl border border-dashed border-slate-300 bg-white/60 p-6 flex items-center gap-4 animate-in" style={{animationDelay:'140ms'}}>
@@ -2362,6 +2374,300 @@ function ReadingMainIdeas({ onExit }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Battle arena: live multiplayer. The host's browser acts as the game server;
+// players join with a 5-letter room code (PeerJS peer-to-peer connections).
+// ---------------------------------------------------------------------------
+const BATTLE_SEC = 12;
+const BATTLE_PREFIX = "vbfy-";
+const BATTLE_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+
+function battleQuestions(words, n) {
+  return shuffleArray(words).slice(0, n).map((w, k) => {
+    const key = k % 2 ? "definition" : "word";
+    const opts = [w[key]];
+    shuffleArray(words).forEach((x) => { if (opts.length < 4 && !opts.includes(x[key])) opts.push(x[key]); });
+    const o = shuffleArray(opts);
+    return { ask: k % 2 ? "Pick the definition" : "Pick the word", prompt: k % 2 ? w.word : w.definition, opts: o, correct: o.indexOf(w[key]) };
+  });
+}
+
+function BattleBoard({ players, me, delta }) {
+  const list = [...players].sort((a, b) => b.score - a.score);
+  return (
+    <ol className="space-y-2">
+      {list.map((p, i) => (
+        <li key={p.id} className={classNames("flex items-center gap-3 rounded-xl border px-4 py-2.5", p.id === me ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-white")}>
+          <span className="w-6 text-sm font-bold text-slate-400">{i + 1}</span>
+          <span className="flex-1 truncate font-semibold text-slate-800">{p.name}{p.id === me ? " (you)" : ""}</span>
+          {delta && <span className={classNames("text-sm font-semibold", p.delta ? "text-emerald-600" : "text-rose-500")}>{p.delta ? "+" + p.delta : p.ans == null ? "–" : "✗"}</span>}
+          <span className="font-display font-bold text-slate-900 tabular-nums">{p.score}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function BattleArena({ onExit }) {
+  const [phase, setPhase] = useState("menu");
+  const [name, setName] = useState(() => { try { return localStorage.getItem("vocabify_battle_name") || ""; } catch (e) { return ""; } });
+  const [joinCode, setJoinCode] = useState("");
+  const [code, setCode] = useState("");
+  const [pkgId, setPkgId] = useState("college-panda");
+  const [count, setCount] = useState(10);
+  const [host, setHost] = useState(false);
+  const [me, setMe] = useState("");
+  const [players, setPlayers] = useState([]);
+  const [q, setQ] = useState(null);
+  const [picked, setPicked] = useState(null);
+  const [rev, setRev] = useState(null);
+  const [pct, setPct] = useState(100);
+  const [done, setDone] = useState(0);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const R = useRef({ pl: {}, conns: {}, peer: null, conn: null, game: null });
+
+  function stop() {
+    const r = R.current;
+    clearTimeout(r.timer); clearTimeout(r.next); clearTimeout(r.jt);
+    const p = r.peer; r.peer = null; r.conn = null; r.conns = {}; r.pl = {}; r.game = null;
+    if (p) p.destroy();
+  }
+  function leave() { stop(); setPhase("menu"); setHost(false); setBusy(false); }
+  function exit() { stop(); onExit(); }
+  useEffect(() => stop, []);
+
+  useEffect(() => {
+    if (phase !== "play" || !q) return;
+    const end = Date.now() + q.sec * 1000;
+    const id = setInterval(() => setPct(Math.max(0, ((end - Date.now()) / (q.sec * 1000)) * 100)), 100);
+    return () => clearInterval(id);
+  }, [phase, q]);
+
+  // Every message (from the host, or the host to itself) lands here.
+  function handle(m) {
+    if (!m) return;
+    if (m.t === "lobby") { setPlayers(m.players); setPhase((p) => (p === "menu" ? "lobby" : p)); }
+    else if (m.t === "q") { setQ(m); setPicked(null); setRev(null); setDone(0); setPct(100); setPhase("play"); }
+    else if (m.t === "prog") setDone(m.n);
+    else if (m.t === "rev") { setRev(m); setPlayers(m.players); setPhase("reveal"); }
+    else if (m.t === "end") { setPlayers(m.players); setPhase("end"); }
+    else if (m.t === "err") { setErr(m.msg); leave(); }
+  }
+  function emit(msg) {
+    Object.values(R.current.conns).forEach((c) => { try { c.send(msg); } catch (e) {} });
+    handle(msg);
+  }
+
+  // ---- host-side game engine ----
+  const snap = () => Object.values(R.current.pl).map((p) => ({ id: p.id, name: p.name, score: p.score, ans: p.ans, delta: p.delta }));
+
+  function nextQ() {
+    const r = R.current, g = r.game;
+    if (!g) return;
+    g.i++; g.shown = false;
+    if (g.i >= g.qs.length) { r.game = null; emit({ t: "end", players: snap() }); return; }
+    Object.values(r.pl).forEach((p) => { p.ans = null; p.delta = 0; });
+    const x = g.qs[g.i];
+    g.t0 = Date.now();
+    r.timer = setTimeout(reveal, BATTLE_SEC * 1000 + 400);
+    emit({ t: "q", n: g.i + 1, total: g.qs.length, ask: x.ask, prompt: x.prompt, opts: x.opts, sec: BATTLE_SEC });
+  }
+  function reveal() {
+    const r = R.current, g = r.game;
+    if (!g || g.shown) return;
+    g.shown = true;
+    clearTimeout(r.timer);
+    const x = g.qs[g.i];
+    Object.values(r.pl).forEach((p) => {
+      p.delta = p.ans === x.correct ? 500 + Math.round(500 * Math.max(0, 1 - (p.at - g.t0) / (BATTLE_SEC * 1000))) : 0;
+      p.score += p.delta;
+    });
+    emit({ t: "rev", correct: x.correct, players: snap() });
+    r.next = setTimeout(nextQ, 3800);
+  }
+  function onAnswer(id, qi, c) {
+    const r = R.current, g = r.game, p = r.pl[id];
+    if (!g || g.shown || !p || qi !== g.i || p.ans !== null || !(c >= 0 && c < 4)) return;
+    p.ans = c; p.at = Date.now();
+    const n = Object.values(r.pl).filter((x) => x.ans !== null).length;
+    if (n === Object.keys(r.pl).length) reveal(); else emit({ t: "prog", n });
+  }
+  function start() {
+    const r = R.current;
+    const pkgs = pkgId === "all" ? RAW_DATA.packages.filter((p) => p.id !== "sat-conventions") : RAW_DATA.packages.filter((p) => p.id === pkgId);
+    const pool = pkgs.flatMap((p) => p.sets.flatMap((s) => s.words));
+    Object.values(r.pl).forEach((p) => { p.score = 0; });
+    r.game = { qs: battleQuestions(pool, count), i: -1 };
+    nextQ();
+  }
+
+  // ---- connecting ----
+  function ready() {
+    if (typeof Peer === "undefined") { setErr("The multiplayer library failed to load. Check your internet connection."); return false; }
+    if (!name.trim()) { setErr("Enter your name first."); return false; }
+    try { localStorage.setItem("vocabify_battle_name", name.trim()); } catch (e) {}
+    setErr(""); setBusy(true);
+    return true;
+  }
+  function create(tries = 0) {
+    if (!tries && !ready()) return;
+    const r = R.current;
+    const c = Array.from({ length: 5 }, () => BATTLE_LETTERS[Math.floor(Math.random() * BATTLE_LETTERS.length)]).join("");
+    const peer = new Peer(BATTLE_PREFIX + c);
+    r.peer = peer;
+    peer.on("open", () => {
+      r.pl = { host: { id: "host", name: name.trim().slice(0, 16), score: 0, ans: null, delta: 0 } };
+      setHost(true); setMe("host"); setCode(c); setBusy(false); setPhase("lobby"); setPlayers(snap());
+    });
+    peer.on("error", (e) => {
+      if (r.peer !== peer) return;
+      if (e.type === "unavailable-id" && tries < 4) { peer.destroy(); create(tries + 1); return; }
+      setErr("Could not open a room (" + e.type + "). Try again."); setBusy(false);
+    });
+    peer.on("connection", (conn) => {
+      conn.on("data", (m) => {
+        if (r.peer !== peer || !m) return;
+        if (m.t === "join") {
+          if (r.game || Object.keys(r.pl).length >= 12) { conn.send({ t: "err", msg: r.game ? "That battle has already started." : "That room is full." }); return; }
+          r.pl[conn.peer] = { id: conn.peer, name: String(m.name || "Player").slice(0, 16), score: 0, ans: null, delta: 0 };
+          r.conns[conn.peer] = conn;
+          emit({ t: "lobby", players: snap() });
+        } else if (m.t === "ans") onAnswer(conn.peer, m.q, m.c);
+      });
+      conn.on("close", () => {
+        if (r.peer !== peer) return;
+        delete r.pl[conn.peer]; delete r.conns[conn.peer];
+        if (r.game && !r.game.shown && Object.values(r.pl).every((x) => x.ans !== null)) reveal();
+        else emit({ t: "lobby", players: snap() });
+      });
+    });
+  }
+  function join() {
+    const room = joinCode.trim().toUpperCase();
+    if (room.length < 4) { setErr("Enter the room code from your host."); return; }
+    if (!ready()) return;
+    const r = R.current, peer = new Peer();
+    r.peer = peer; setCode(room);
+    const fail = () => { if (r.peer !== peer) return; setErr("Could not reach that room. Check the code and try again."); leave(); };
+    r.jt = setTimeout(fail, 12000);
+    peer.on("error", fail);
+    peer.on("open", (id) => {
+      setMe(id);
+      const c = peer.connect(BATTLE_PREFIX + room, { reliable: true });
+      r.conn = c;
+      c.on("open", () => { clearTimeout(r.jt); setBusy(false); c.send({ t: "join", name: name.trim().slice(0, 16) }); });
+      c.on("data", handle);
+      c.on("close", () => { if (r.peer !== peer) return; setErr("The host left the battle."); leave(); });
+    });
+  }
+  function pick(i) {
+    if (picked !== null || phase !== "play") return;
+    setPicked(i);
+    if (host) onAnswer("host", q.n - 1, i); else R.current.conn.send({ t: "ans", q: q.n - 1, c: i });
+  }
+
+  // ---- UI ----
+  const wrap = "max-w-3xl mx-auto px-5 sm:px-8 py-10 animate-in";
+  const back = (label, fn) => <button onClick={fn} className="text-sm font-semibold text-slate-500 hover:text-slate-800 mb-6 focus-ring">&larr; {label}</button>;
+  const input = "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 focus-ring";
+  const primary = "w-full rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 btn-press disabled:opacity-60 focus-ring";
+
+  if (phase === "menu") return (
+    <div className={wrap}>
+      {back("Back to packages", exit)}
+      <h1 className="font-display font-extrabold text-[28px] sm:text-[32px] letter-tighter text-slate-900 mb-2">Battle arena</h1>
+      <p className="text-slate-500 text-[15px] mb-8">Race friends in real time. Everyone answers the same vocabulary questions on their own device, and faster correct answers score more.</p>
+      <label className="block text-sm font-semibold text-slate-700 mb-1.5">Your name</label>
+      <input className={classNames(input, "mb-5")} maxLength={16} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Aziz" />
+      <div className="grid sm:grid-cols-2 gap-4">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6">
+          <p className="font-display font-bold text-slate-900 mb-1">Host a battle</p>
+          <p className="text-sm text-slate-500 mb-4">Get a room code and share it. Keep this tab open while you play.</p>
+          <button onClick={() => create()} disabled={busy} className={primary}>{busy ? "Opening room..." : "Create room"}</button>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-6">
+          <p className="font-display font-bold text-slate-900 mb-1">Join a battle</p>
+          <input className={classNames(input, "mb-3 uppercase tracking-[0.3em] text-center font-bold")} maxLength={5} value={joinCode} onChange={(e) => setJoinCode(e.target.value)} placeholder="CODE" />
+          <button onClick={join} disabled={busy} className={primary}>{busy ? "Connecting..." : "Join room"}</button>
+        </div>
+      </div>
+      {err && <p className="mt-4 text-sm font-semibold text-rose-600">{err}</p>}
+    </div>
+  );
+
+  if (phase === "lobby") return (
+    <div className={wrap}>
+      {back("Leave room", leave)}
+      <p className="text-sm font-semibold text-slate-500">Room code</p>
+      <p className="font-display font-extrabold text-5xl tracking-[0.25em] text-blue-600 mb-6">{code}</p>
+      <p className="text-sm font-semibold text-slate-700 mb-2">{players.length} {players.length === 1 ? "player" : "players"} in the room</p>
+      <div className="flex flex-wrap gap-2 mb-8">
+        {players.map((p) => <span key={p.id} className="rounded-full bg-white border border-slate-200 px-3.5 py-1.5 text-sm font-semibold text-slate-800">{p.name}{p.id === me ? " (you)" : ""}</span>)}
+      </div>
+      {host ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-6">
+          <div className="grid sm:grid-cols-2 gap-4 mb-5">
+            <label className="text-sm font-semibold text-slate-700">Word list
+              <select className={classNames(input, "mt-1.5")} value={pkgId} onChange={(e) => setPkgId(e.target.value)}>
+                {RAW_DATA.packages.filter((p) => p.id !== "sat-conventions").map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                <option value="all">All word lists mixed</option>
+              </select>
+            </label>
+            <label className="text-sm font-semibold text-slate-700">Questions
+              <select className={classNames(input, "mt-1.5")} value={count} onChange={(e) => setCount(+e.target.value)}>
+                {[5, 10, 15, 20, 30].map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+          </div>
+          <button onClick={start} className={primary}>Start battle</button>
+        </div>
+      ) : <p className="text-slate-500 text-[15px] animate-pulse-soft">Waiting for the host to start...</p>}
+    </div>
+  );
+
+  if (phase === "end") {
+    const top = [...players].sort((a, b) => b.score - a.score)[0];
+    return (
+      <div className={wrap}>
+        <h1 className="font-display font-extrabold text-[28px] sm:text-[32px] letter-tighter text-slate-900 mb-1">Final standings</h1>
+        <p className="text-slate-500 text-[15px] mb-6">{top ? "🏆 " + top.name + " wins with " + top.score + " points." : ""}</p>
+        <BattleBoard players={players} me={me} />
+        <div className="mt-6 flex gap-3">
+          {host && <button onClick={start} className={primary}>Rematch</button>}
+          <button onClick={leave} className="w-full rounded-xl border border-slate-200 bg-white font-semibold text-slate-700 py-3 btn-press focus-ring">Leave room</button>
+        </div>
+      </div>
+    );
+  }
+
+  // play + reveal
+  const style = (i) => phase === "reveal"
+    ? (i === rev.correct ? "border-emerald-500 bg-emerald-50 text-emerald-900" : i === picked ? "border-rose-400 bg-rose-50 text-rose-900" : "border-slate-200 bg-white text-slate-400")
+    : (picked === i ? "border-blue-500 bg-blue-50 text-blue-900" : "border-slate-200 bg-white text-slate-800 hover:border-blue-400");
+  return (
+    <div className={wrap}>
+      <div className="flex items-center justify-between mb-3 text-sm font-semibold text-slate-500">
+        <span>Question {q.n} / {q.total}</span>
+        <span>{phase === "reveal" ? "Next question coming up..." : done + " / " + players.length + " answered"}</span>
+      </div>
+      <div className="h-2 rounded-full bg-slate-200 overflow-hidden mb-6">
+        <div className={classNames("h-full rounded-full", pct > 35 ? "bg-blue-600" : "bg-rose-500")} style={{ width: (phase === "reveal" ? 0 : pct) + "%", transition: "width 0.1s linear" }} />
+      </div>
+      <div className="rounded-2xl border border-slate-200 bg-white p-7 mb-5 card-shadow">
+        <p className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-2">{q.ask}</p>
+        <p className="font-display font-bold text-2xl text-slate-900">{q.prompt}</p>
+      </div>
+      <div className="grid gap-3">
+        {q.opts.map((o, i) => (
+          <button key={i} onClick={() => pick(i)} disabled={picked !== null || phase === "reveal"} className={classNames("text-left rounded-xl border-2 px-5 py-3.5 font-medium btn-press", style(i))}>{o}</button>
+        ))}
+      </div>
+      <div className="mt-8"><BattleBoard players={players} me={me} delta={phase === "reveal"} /></div>
+    </div>
+  );
+}
+
 function App() {
   const [view, setView] = useState({ screen: "dashboard" });
   const [progress, setProgress] = useState(() => loadProgress());
@@ -2386,6 +2692,7 @@ function App() {
   function goDashboard() { setView({ screen: "dashboard" }); window.scrollTo({top:0}); }
   function openMock() { setView({ screen: "mock" }); window.scrollTo({top:0}); }
   function openReading() { setView({ screen: "reading" }); window.scrollTo({top:0}); }
+  function openBattle() { setView({ screen: "battle" }); window.scrollTo({top:0}); }
   function openPackage(pkgId) { setView({ screen: "setlist", pkgId }); window.scrollTo({top:0}); }
   function openSet(pkgId, setObj) { setView({ screen: "setoverview", pkgId, setObj }); window.scrollTo({top:0}); }
   function startMode(pkgId, setObj, mode) { setView({ screen: "study", pkgId, setObj, mode }); window.scrollTo({top:0}); }
@@ -2397,6 +2704,12 @@ function App() {
     breadcrumbs = [
       { label: "Packages", onClick: goDashboard },
       { label: "Reading: Main Ideas", onClick: null },
+    ];
+  }
+  if (view.screen === "battle") {
+    breadcrumbs = [
+      { label: "Packages", onClick: goDashboard },
+      { label: "Battle arena", onClick: null },
     ];
   }
   if (view.screen === "mock") {
@@ -2438,12 +2751,14 @@ function App() {
       <Header onLogoClick={goDashboard} breadcrumbs={breadcrumbs} />
 
       {view.screen === "dashboard" && (
-        <Dashboard data={RAW_DATA} progress={progress} onOpenPackage={openPackage} onOpenMock={openMock} onOpenReading={openReading} onReview={startReview} />
+        <Dashboard data={RAW_DATA} progress={progress} onOpenPackage={openPackage} onOpenMock={openMock} onOpenReading={openReading} onOpenBattle={openBattle} onReview={startReview} />
       )}
 
       {view.screen === "mock" && <MockExam onExit={goDashboard} />}
 
       {view.screen === "reading" && <ReadingMainIdeas onExit={goDashboard} />}
+
+      {view.screen === "battle" && <BattleArena onExit={goDashboard} />}
 
       {view.screen === "setlist" && (() => {
         const pkg = findPackage(view.pkgId);
