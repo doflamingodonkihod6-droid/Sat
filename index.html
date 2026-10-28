@@ -2376,7 +2376,7 @@ function ReadingMainIdeas({ onExit }) {
 
 // ---------------------------------------------------------------------------
 // Battle arena: live multiplayer. The host's browser acts as the game server;
-// players join with a 5-letter room code (PeerJS peer-to-peer connections).
+// players join with a 5-character room code (MQTT over WebSockets).
 // ---------------------------------------------------------------------------
 const BATTLE_SEC = 12;
 const BATTLE_BROKERS = ["wss://mqtt.eclipseprojects.io:443/mqtt", "wss://broker.hivemq.com:8884/mqtt", "wss://broker.emqx.io:8084/mqtt", "wss://test.mosquitto.org:8081"];
@@ -2390,6 +2390,12 @@ function battleConnect(i, ok, fail) {
   c.once("connect", () => { if (!settled) { settled = true; clearTimeout(t); ok(c); } });
 }
 const BATTLE_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+
+// Words for a battle: a whole word list, one set of it, or every list mixed.
+function battlePool(pkgId, setId) {
+  const pkgs = pkgId === "all" ? RAW_DATA.packages.filter((p) => p.id !== "sat-conventions") : RAW_DATA.packages.filter((p) => p.id === pkgId);
+  return pkgs.flatMap((p) => p.sets).filter((s) => pkgId === "all" || setId === "all" || s.id === setId).flatMap((s) => s.words);
+}
 
 function battleQuestions(words, n) {
   return shuffleArray(words).slice(0, n).map((w, k) => {
@@ -2423,6 +2429,7 @@ function BattleArena({ onExit }) {
   const [joinCode, setJoinCode] = useState("");
   const [code, setCode] = useState("");
   const [pkgId, setPkgId] = useState("college-panda");
+  const [setId, setSetId] = useState("all");
   const [count, setCount] = useState(10);
   const [host, setHost] = useState(false);
   const [me, setMe] = useState("");
@@ -2504,10 +2511,9 @@ function BattleArena({ onExit }) {
   }
   function start() {
     const r = R.current;
-    const pkgs = pkgId === "all" ? RAW_DATA.packages.filter((p) => p.id !== "sat-conventions") : RAW_DATA.packages.filter((p) => p.id === pkgId);
-    const pool = pkgs.flatMap((p) => p.sets.flatMap((s) => s.words));
+    const pool = battlePool(pkgId, setId);
     Object.values(r.pl).forEach((p) => { p.score = 0; });
-    r.game = { qs: battleQuestions(pool, count), i: -1 };
+    r.game = { qs: battleQuestions(pool, Math.min(count, pool.length)), i: -1 };
     nextQ();
   }
 
@@ -2600,6 +2606,11 @@ function BattleArena({ onExit }) {
   const input = "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 focus-ring";
   const primary = "w-full rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 btn-press disabled:opacity-60 focus-ring";
 
+  const selPkg = RAW_DATA.packages.find((p) => p.id === pkgId);
+  const poolSize = battlePool(pkgId, setId).length;
+  const countOpts = [...new Set([5, 10, 15, 20, 30].filter((n) => n <= poolSize).concat(poolSize <= 30 ? [poolSize] : []))].sort((a, b) => a - b);
+  const cnt = Math.min(count, poolSize);
+
   if (phase === "menu") return (
     <div className={wrap}>
       {back("Back to packages", exit)}
@@ -2636,14 +2647,22 @@ function BattleArena({ onExit }) {
         <div className="rounded-2xl border border-slate-200 bg-white p-6">
           <div className="grid sm:grid-cols-2 gap-4 mb-5">
             <label className="text-sm font-semibold text-slate-700">Word list
-              <select className={classNames(input, "mt-1.5")} value={pkgId} onChange={(e) => setPkgId(e.target.value)}>
+              <select className={classNames(input, "mt-1.5")} value={pkgId} onChange={(e) => { setPkgId(e.target.value); setSetId("all"); }}>
                 {RAW_DATA.packages.filter((p) => p.id !== "sat-conventions").map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 <option value="all">All word lists mixed</option>
               </select>
             </label>
+            {selPkg && (
+              <label className="text-sm font-semibold text-slate-700">Set
+                <select className={classNames(input, "mt-1.5")} value={setId} onChange={(e) => setSetId(e.target.value)}>
+                  <option value="all">Whole list ({selPkg.sets.reduce((a, st) => a + st.words.length, 0)} words)</option>
+                  {selPkg.sets.map((st) => <option key={st.id} value={st.id}>{st.name} ({st.words.length} words)</option>)}
+                </select>
+              </label>
+            )}
             <label className="text-sm font-semibold text-slate-700">Questions
-              <select className={classNames(input, "mt-1.5")} value={count} onChange={(e) => setCount(+e.target.value)}>
-                {[5, 10, 15, 20, 30].map((n) => <option key={n} value={n}>{n}</option>)}
+              <select className={classNames(input, "mt-1.5")} value={cnt} onChange={(e) => setCount(+e.target.value)}>
+                {countOpts.map((n) => <option key={n} value={n}>{n === poolSize ? n + " (all words)" : n}</option>)}
               </select>
             </label>
           </div>
