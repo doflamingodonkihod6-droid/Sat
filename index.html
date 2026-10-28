@@ -11,7 +11,7 @@
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.7/babel.min.js"></script>
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Lexend:wght@500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -2379,7 +2379,16 @@ function ReadingMainIdeas({ onExit }) {
 // players join with a 5-letter room code (PeerJS peer-to-peer connections).
 // ---------------------------------------------------------------------------
 const BATTLE_SEC = 12;
-const BATTLE_PREFIX = "vbfy-";
+const BATTLE_BROKERS = ["wss://mqtt.eclipseprojects.io:443/mqtt", "wss://broker.hivemq.com:8884/mqtt", "wss://broker.emqx.io:8084/mqtt", "wss://test.mosquitto.org:8081"];
+const battleTopic = (room, k) => "vocabify-battle/" + room + "/" + k;
+function battleParse(buf) { try { return JSON.parse(buf.toString()); } catch (e) { return null; } }
+function battleConnect(i, ok, fail) {
+  const c = mqtt.connect(BATTLE_BROKERS[i], { connectTimeout: 6000, reconnectPeriod: 2000, clientId: "vb_" + Math.random().toString(16).slice(2, 10) });
+  let settled = false;
+  c.on("error", () => {});
+  const t = setTimeout(() => { if (!settled) { settled = true; c.end(true); fail(); } }, 7000);
+  c.once("connect", () => { if (!settled) { settled = true; clearTimeout(t); ok(c); } });
+}
 const BATTLE_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ";
 
 function battleQuestions(words, n) {
@@ -2425,13 +2434,15 @@ function BattleArena({ onExit }) {
   const [done, setDone] = useState(0);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
-  const R = useRef({ pl: {}, conns: {}, peer: null, conn: null, game: null });
+  const R = useRef({ pl: {}, gen: 0, cl: null, game: null });
 
   function stop() {
     const r = R.current;
-    clearTimeout(r.timer); clearTimeout(r.next); clearTimeout(r.jt);
-    const p = r.peer; r.peer = null; r.conn = null; r.conns = {}; r.pl = {}; r.game = null;
-    if (p) p.destroy();
+    clearTimeout(r.timer); clearTimeout(r.next); clearTimeout(r.jt); clearInterval(r.hb);
+    const c = r.cl;
+    if (c && r.room) { try { c.publish(battleTopic(r.room, r.isHost ? "dn" : "up"), JSON.stringify(r.isHost ? { t: "closed" } : { t: "bye", id: r.id })); } catch (e) {} }
+    r.gen++; r.cl = null; r.room = null; r.isHost = false; r.pl = {}; r.game = null;
+    if (c) c.end();
   }
   function leave() { stop(); setPhase("menu"); setHost(false); setBusy(false); }
   function exit() { stop(); onExit(); }
@@ -2454,10 +2465,8 @@ function BattleArena({ onExit }) {
     else if (m.t === "end") { setPlayers(m.players); setPhase("end"); }
     else if (m.t === "err") { setErr(m.msg); leave(); }
   }
-  function emit(msg) {
-    Object.values(R.current.conns).forEach((c) => { try { c.send(msg); } catch (e) {} });
-    handle(msg);
-  }
+  function send(msg, k = "dn") { const r = R.current; if (r.cl && r.room) r.cl.publish(battleTopic(r.room, k), JSON.stringify(msg)); }
+  function emit(msg) { send(msg); handle(msg); }
 
   // ---- host-side game engine ----
   const snap = () => Object.values(R.current.pl).map((p) => ({ id: p.id, name: p.name, score: p.score, ans: p.ans, delta: p.delta }));
@@ -2504,67 +2513,85 @@ function BattleArena({ onExit }) {
 
   // ---- connecting ----
   function ready() {
-    if (typeof Peer === "undefined") { setErr("The multiplayer library failed to load. Check your internet connection."); return false; }
+    if (typeof mqtt === "undefined") { setErr("The multiplayer library failed to load. Check your internet connection."); return false; }
     if (!name.trim()) { setErr("Enter your name first."); return false; }
     try { localStorage.setItem("vocabify_battle_name", name.trim()); } catch (e) {}
     setErr(""); setBusy(true);
     return true;
   }
-  function create(tries = 0) {
-    if (!tries && !ready()) return;
+  function dropCheck() {
     const r = R.current;
-    const c = Array.from({ length: 5 }, () => BATTLE_LETTERS[Math.floor(Math.random() * BATTLE_LETTERS.length)]).join("");
-    const peer = new Peer(BATTLE_PREFIX + c);
-    r.peer = peer;
-    peer.on("open", () => {
+    if (r.game && !r.game.shown && Object.values(r.pl).every((x) => x.ans !== null)) reveal(); else emit({ t: "lobby", players: snap() });
+  }
+  function create(i = 0, g) {
+    const r = R.current;
+    if (i === 0) { if (!ready()) return; g = r.gen; }
+    if (i >= BATTLE_BROKERS.length) { setErr("Could not reach any multiplayer server. Your network may be blocking them. Try another network or mobile data."); setBusy(false); return; }
+    battleConnect(i, (c) => {
+      if (r.gen !== g) { c.end(true); return; }
+      const room = String(i + 1) + Array.from({ length: 4 }, () => BATTLE_LETTERS[Math.floor(Math.random() * BATTLE_LETTERS.length)]).join("");
+      r.cl = c; r.room = room; r.isHost = true;
       r.pl = { host: { id: "host", name: name.trim().slice(0, 16), score: 0, ans: null, delta: 0 } };
-      setHost(true); setMe("host"); setCode(c); setBusy(false); setPhase("lobby"); setPlayers(snap());
-    });
-    peer.on("error", (e) => {
-      if (r.peer !== peer) return;
-      if (e.type === "unavailable-id" && tries < 4) { peer.destroy(); create(tries + 1); return; }
-      setErr("Could not open a room (" + e.type + "). Try again."); setBusy(false);
-    });
-    peer.on("connection", (conn) => {
-      conn.on("data", (m) => {
-        if (r.peer !== peer || !m) return;
+      c.subscribe(battleTopic(room, "up"));
+      c.on("message", (t, buf) => {
+        const m = battleParse(buf);
+        if (!m || !m.id) return;
         if (m.t === "join") {
-          if (r.game || Object.keys(r.pl).length >= 12) { conn.send({ t: "err", msg: r.game ? "That battle has already started." : "That room is full." }); return; }
-          r.pl[conn.peer] = { id: conn.peer, name: String(m.name || "Player").slice(0, 16), score: 0, ans: null, delta: 0 };
-          r.conns[conn.peer] = conn;
+          if (!r.pl[m.id]) {
+            if (r.game || Object.keys(r.pl).length >= 12) { send({ t: "err", to: m.id, msg: r.game ? "That battle has already started." : "That room is full." }); return; }
+            r.pl[m.id] = { id: m.id, name: String(m.name || "Player").slice(0, 16), score: 0, ans: null, delta: 0 };
+          }
+          r.pl[m.id].seen = Date.now();
           emit({ t: "lobby", players: snap() });
-        } else if (m.t === "ans") onAnswer(conn.peer, m.q, m.c);
+        } else if (r.pl[m.id]) {
+          r.pl[m.id].seen = Date.now();
+          if (m.t === "ans") onAnswer(m.id, m.q, m.c);
+          else if (m.t === "bye") { delete r.pl[m.id]; dropCheck(); }
+        }
       });
-      conn.on("close", () => {
-        if (r.peer !== peer) return;
-        delete r.pl[conn.peer]; delete r.conns[conn.peer];
-        if (r.game && !r.game.shown && Object.values(r.pl).every((x) => x.ans !== null)) reveal();
-        else emit({ t: "lobby", players: snap() });
-      });
-    });
+      r.hb = setInterval(() => {
+        const dead = Object.values(r.pl).filter((p) => p.id !== "host" && Date.now() - p.seen > 10000);
+        if (dead.length) { dead.forEach((p) => delete r.pl[p.id]); dropCheck(); }
+        send({ t: "hb" });
+      }, 3000);
+      setHost(true); setMe("host"); setCode(room); setBusy(false); setPhase("lobby"); setPlayers(snap());
+    }, () => { if (r.gen === g) create(i + 1, g); });
   }
   function join() {
-    const room = joinCode.trim().toUpperCase();
-    if (room.length < 4) { setErr("Enter the room code from your host."); return; }
+    const room = joinCode.trim().toUpperCase(), i = +room[0] - 1;
+    if (room.length < 5 || !(i >= 0 && i < BATTLE_BROKERS.length)) { setErr("That room code doesn't look right."); return; }
     if (!ready()) return;
-    const r = R.current, peer = new Peer();
-    r.peer = peer; setCode(room);
-    const fail = () => { if (r.peer !== peer) return; setErr("Could not reach that room. Check the code and try again."); leave(); };
-    r.jt = setTimeout(fail, 12000);
-    peer.on("error", fail);
-    peer.on("open", (id) => {
-      setMe(id);
-      const c = peer.connect(BATTLE_PREFIX + room, { reliable: true });
-      r.conn = c;
-      c.on("open", () => { clearTimeout(r.jt); setBusy(false); c.send({ t: "join", name: name.trim().slice(0, 16) }); });
-      c.on("data", handle);
-      c.on("close", () => { if (r.peer !== peer) return; setErr("The host left the battle."); leave(); });
-    });
+    const r = R.current, g = r.gen, id = "p" + Math.random().toString(36).slice(2, 9);
+    const fail = (msg) => { if (r.gen === g) { setErr(msg); leave(); } };
+    setCode(room); setMe(id);
+    battleConnect(i, (c) => {
+      if (r.gen !== g) { c.end(true); return; }
+      r.cl = c; r.room = room; r.id = id; r.isHost = false; r.joined = false; r.seen = Date.now();
+      c.subscribe(battleTopic(room, "dn"));
+      c.on("message", (t, buf) => {
+        const m = battleParse(buf);
+        if (!m || (m.to && m.to !== id)) return;
+        r.seen = Date.now();
+        if (m.t === "hb") return;
+        if (m.t === "closed") { fail("The host left the battle."); return; }
+        if (!r.joined) {
+          if (m.t === "lobby" && m.players.some((p) => p.id === id)) { r.joined = true; clearTimeout(r.jt); }
+          else if (m.t !== "err") return;
+        }
+        handle(m);
+      });
+      const ping = () => {
+        if (r.joined && Date.now() - r.seen > 12000) { fail("Lost connection to the host."); return; }
+        c.publish(battleTopic(room, "up"), JSON.stringify(r.joined ? { t: "ping", id } : { t: "join", id, name: name.trim().slice(0, 16) }));
+      };
+      ping(); r.hb = setInterval(ping, 3000);
+      r.jt = setTimeout(() => { if (!r.joined) fail("Room not found. Check the code and try again."); }, 9000);
+    }, () => fail("Could not reach the multiplayer server. Check your connection or try another network."));
   }
   function pick(i) {
     if (picked !== null || phase !== "play") return;
     setPicked(i);
-    if (host) onAnswer("host", q.n - 1, i); else R.current.conn.send({ t: "ans", q: q.n - 1, c: i });
+    if (host) onAnswer("host", q.n - 1, i); else send({ t: "ans", id: me, q: q.n - 1, c: i }, "up");
   }
 
   // ---- UI ----
