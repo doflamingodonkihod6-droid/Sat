@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Vocabify — SAT/IELTS Vocabulary Trainer</title>
-<meta name="description" content="Learn SAT and IELTS vocabulary with flashcards, matching, speed rounds, tests, Reading main-idea practice and a full-length mock exam." />
+<meta name="description" content="Learn SAT and IELTS vocabulary with flashcards, matching, speed rounds, falling-words arcade, tests, Reading main-idea practice and a full-length mock exam." />
 <meta name="theme-color" content="#2563eb" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📘</text></svg>" />
 <script src="https://cdn.tailwindcss.com"></script>
@@ -446,6 +446,21 @@ function IconSearch(props) {
 // Progress calculations
 // ---------------------------------------------------------------------------
 
+function IconFalling(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <rect x="4" y="3" width="16" height="7" rx="2" /><path d="M12 14v7" /><path d="M8.5 17.5L12 21l3.5-3.5" />
+    </svg>
+  );
+}
+function IconHeart(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
+      <path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z" />
+    </svg>
+  );
+}
+
 function computeSetStats(setObj, progress) {
   let mastered = 0, learning = 0, neu = 0;
   setObj.words.forEach((w) => {
@@ -757,6 +772,7 @@ const STUDY_MODES = [
   { id: "matching", label: "Matching", desc: "Race to pair every word with its meaning.", icon: IconGrid, accent: "violet" },
   { id: "speed", label: "Speed", desc: "Answer as many as you can before time runs out.", icon: IconBolt, accent: "amber" },
   { id: "test", label: "Test", desc: "A graded multiple-choice check of this set.", icon: IconPencilCheck, accent: "emerald" },
+  { id: "falling", label: "Falling", desc: "Definitions drop from above. Name the word before it lands.", icon: IconFalling, accent: "rose" },
 ];
 
 const ACCENT_CLASSES = {
@@ -764,6 +780,7 @@ const ACCENT_CLASSES = {
   violet: { bg: "bg-violet-50", text: "text-violet-600", ring: "group-hover:ring-violet-200", solid: "bg-violet-600" },
   amber: { bg: "bg-amber-50", text: "text-amber-600", ring: "group-hover:ring-amber-200", solid: "bg-amber-500" },
   emerald: { bg: "bg-emerald-50", text: "text-emerald-600", ring: "group-hover:ring-emerald-200", solid: "bg-emerald-600" },
+  rose: { bg: "bg-rose-50", text: "text-rose-600", ring: "group-hover:ring-rose-200", solid: "bg-rose-600" },
 };
 
 function StudyModeCard({ mode, onClick, index }) {
@@ -846,7 +863,7 @@ function SetOverview({ setObj, progress, onBack, onStartMode }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-10 [&>*:last-child]:col-span-2 lg:[&>*:last-child]:col-span-1">
         {STUDY_MODES.map((m, i) => (
           <StudyModeCard key={m.id} mode={m} onClick={onStartMode} index={i} />
         ))}
@@ -1323,6 +1340,459 @@ function SpeedMode({ setObj, onUpdateStatus, onExit, seconds = 60 }) {
             </button>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Falling words (arcade) mode
+// Definitions fall from the top. Pick or type the matching word before they land.
+// ---------------------------------------------------------------------------
+
+const FALL_BEST_KEY = "vocabify_falling_best_v1";
+function fallingLoadBest() {
+  try { return JSON.parse(localStorage.getItem(FALL_BEST_KEY)) || {}; } catch (e) { return {}; }
+}
+function fallingSaveBest(b) {
+  try { localStorage.setItem(FALL_BEST_KEY, JSON.stringify(b)); } catch (e) {}
+}
+
+// dur = seconds for a card to fall the full height at level 1, gap = seconds between spawns at level 1
+const FALL_DIFF = {
+  easy:   { label: "Easy",   desc: "Slow and steady", dur: 20,  gap: 5.5 },
+  normal: { label: "Normal", desc: "A fair challenge", dur: 14,  gap: 4.0 },
+  hard:   { label: "Hard",   desc: "Fast and furious", dur: 9.5, gap: 2.8 },
+};
+const FALL_LANES = 3;
+const FALL_MAX_LIVES = 3;
+const FALL_LEVEL_EVERY = 6; // correct answers per level
+
+function fallingNorm(s) { return s.toLowerCase().replace(/[^a-z0-9]/g, ""); }
+
+// Word entries are messy ("Delegate (verb)", "Digress(ion)", "Epitome, Epitomize", "To Stress").
+// Build every spelling we should accept when the player types the answer.
+const FALL_POS_HINT = /^(v|n|adj|adv|verb|noun|adjective|adverb|prep|conj)\.?$/i;
+function fallingAccepted(word) {
+  const out = new Set();
+  word.split(/[,/]/).forEach((raw) => {
+    const p = raw.trim();
+    if (!p) return;
+    const forms = [];
+    const m = p.match(/^(.*?)\(([^)]*)\)(.*)$/);
+    if (m) {
+      forms.push((m[1] + m[3]).trim());
+      if (!FALL_POS_HINT.test(m[2].trim())) forms.push((m[1] + m[2] + m[3]).trim());
+    } else {
+      forms.push(p);
+    }
+    forms.forEach((f) => {
+      out.add(fallingNorm(f));
+      out.add(fallingNorm(f.replace(/^to\s+/i, "")));
+    });
+  });
+  out.add(fallingNorm(word));
+  out.delete("");
+  return [...out];
+}
+
+function FallingMode({ setObj, onUpdateStatus, onExit }) {
+  const [phase, setPhase] = useState("ready"); // ready | play | paused | over
+  const [diff, setDiff] = useState("normal");
+  const [style, setStyle] = useState("pick"); // pick | type
+  const [input, setInput] = useState("");
+  const [best, setBest] = useState(() => fallingLoadBest());
+  const [badId, setBadId] = useState(null);
+  const [shaking, setShaking] = useState(false);
+  const [, setTick] = useState(0);
+  const G = useRef(null);
+  const inputRef = useRef(null);
+  const bankRef = useRef([]);
+  const updRef = useRef(onUpdateStatus);
+  updRef.current = onUpdateStatus;
+
+  // ----- game lifecycle -----
+  function startGame() {
+    G.current = {
+      items: [], uid: 0, lives: FALL_MAX_LIVES, score: 0, combo: 0, maxCombo: 0,
+      correct: 0, level: 1, spawnIn: 0.5, queue: [], missed: [], missedIds: new Set(),
+      diff, banner: null, newBest: false,
+    };
+    setInput("");
+    setPhase("play");
+  }
+
+  function spawn(g) {
+    const D = FALL_DIFF[g.diff];
+    const live = g.items.filter((i) => i.state === "fall");
+    if (live.length >= FALL_LANES) return false;
+    const free = [];
+    for (let l = 0; l < FALL_LANES; l++) {
+      if (!live.some((i) => i.lane === l && i.y < 0.4)) free.push(l);
+    }
+    if (!free.length) return false;
+
+    let w = null;
+    for (let tries = 0; tries < setObj.words.length + 2 && !w; tries++) {
+      if (!g.queue.length) g.queue = shuffleArray(setObj.words);
+      const cand = g.queue.shift();
+      if (live.some((i) => i.w.id === cand.id)) g.queue.push(cand);
+      else w = cand;
+    }
+    if (!w) return false;
+
+    const mult = Math.min(2.4, 1 + 0.14 * (g.level - 1));
+    const lane = free[Math.floor(Math.random() * free.length)];
+    const distractors = shuffleArray(setObj.words.filter((x) => x.id !== w.id)).slice(0, 2);
+    g.items.push({
+      uid: ++g.uid, w, lane, y: 0, t: 0, state: "fall",
+      speed: (1 / D.dur) * mult * (0.92 + Math.random() * 0.16),
+      opts: [w, ...distractors], acc: fallingAccepted(w.word), pts: 0,
+    });
+    return true;
+  }
+
+  // ----- main loop -----
+  useEffect(() => {
+    if (phase !== "play") return;
+    let raf;
+    let last = performance.now();
+
+    const step = (now) => {
+      const g = G.current;
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      const D = FALL_DIFF[g.diff];
+
+      g.spawnIn -= dt;
+      let live = 0;
+      for (const it of g.items) {
+        if (it.state === "fall") {
+          it.y += it.speed * dt;
+          if (it.y >= 1) {
+            it.y = 1; it.state = "miss"; it.t = 0;
+            g.lives -= 1; g.combo = 0;
+            if (!g.missedIds.has(it.w.id)) { g.missedIds.add(it.w.id); g.missed.push(it.w); }
+            updRef.current(it.w.id, "learning");
+          } else live++;
+        } else {
+          it.t += dt;
+        }
+      }
+      g.items = g.items.filter((it) => it.state === "fall" || it.t < (it.state === "hit" ? 0.6 : 1.6));
+      if (g.banner) { g.banner.t -= dt; if (g.banner.t <= 0) g.banner = null; }
+
+      if (live === 0 && g.spawnIn > 0.4) g.spawnIn = 0.4;
+      if (g.spawnIn <= 0) {
+        const gap = Math.max(1.3, D.gap / (1 + 0.1 * (g.level - 1)));
+        g.spawnIn = spawn(g) ? gap * (0.85 + Math.random() * 0.3) : 0.3;
+      }
+
+      if (g.lives <= 0) {
+        const b = fallingLoadBest();
+        if (g.score > (b[g.diff] || 0)) { b[g.diff] = g.score; fallingSaveBest(b); g.newBest = g.score > 0; setBest(b); }
+        setPhase("over");
+        return;
+      }
+      setTick((n) => (n + 1) % 1000000);
+      raf = requestAnimationFrame(step);
+    };
+
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [phase]);
+
+  // pause on Esc / tab hidden; keyboard shortcuts for the word bank
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === "Escape") {
+        if (phase === "play") setPhase("paused");
+        else if (phase === "paused") setPhase("play");
+        return;
+      }
+      if (phase === "play" && style === "pick" && /^[1-9]$/.test(e.key)) {
+        const w = bankRef.current[parseInt(e.key, 10) - 1];
+        if (w) tryAnswer(w.id);
+      }
+    }
+    function onVis() { if (document.hidden && phase === "play") setPhase("paused"); }
+    window.addEventListener("keydown", onKey);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  });
+
+  useEffect(() => {
+    if (phase === "play" && style === "type" && inputRef.current) inputRef.current.focus();
+  }, [phase, style]);
+
+  // ----- answering -----
+  function wrong(id) {
+    const g = G.current;
+    if (!g) return;
+    g.combo = 0;
+    setShaking(true);
+    setTimeout(() => setShaking(false), 450);
+    if (id) { setBadId(id); setTimeout(() => setBadId((b) => (b === id ? null : b)), 350); }
+  }
+
+  function tryAnswer(wordId) {
+    const g = G.current;
+    if (!g || phase !== "play") return false;
+    const it = g.items.find((i) => i.state === "fall" && i.w.id === wordId);
+    if (!it) { wrong(wordId); return false; }
+    it.state = "hit"; it.t = 0;
+    g.combo += 1; g.maxCombo = Math.max(g.maxCombo, g.combo);
+    g.correct += 1;
+    it.pts = 10 + Math.round((1 - it.y) * 10) + Math.min(g.combo, 10);
+    g.score += it.pts;
+    updRef.current(it.w.id, "mastered");
+    if (g.correct % FALL_LEVEL_EVERY === 0) {
+      g.level += 1;
+      let text = "Level " + g.level;
+      if (g.level % 3 === 0 && g.lives < FALL_MAX_LIVES) { g.lives += 1; text += " · +1 life"; }
+      g.banner = { text, t: 1.6 };
+    }
+    setTick((n) => n + 1);
+    return true;
+  }
+
+  function liveItems() { return G.current ? G.current.items.filter((i) => i.state === "fall") : []; }
+
+  function onType(v) {
+    setInput(v);
+    const n = fallingNorm(v);
+    if (!n) return;
+    const live = liveItems();
+    const hit = live.find((i) => i.acc.includes(n));
+    if (!hit) return;
+    // don't fire early if the player may still be typing a longer word on screen
+    const longer = live.some((i) => i !== hit && i.acc.some((a) => a.length > n.length && a.startsWith(n)));
+    if (longer) return;
+    tryAnswer(hit.w.id);
+    setInput("");
+  }
+
+  function onTypeKey(e) {
+    if (e.key !== "Enter") return;
+    const n = fallingNorm(input);
+    if (!n) return;
+    const hit = liveItems().find((i) => i.acc.includes(n));
+    if (hit) tryAnswer(hit.w.id); else wrong(null);
+    setInput("");
+  }
+
+  // ----- screens -----
+  if (phase === "ready") {
+    const bd = best[diff] || 0;
+    return (
+      <div className="max-w-lg mx-auto px-5 py-10 animate-pop">
+        <button onClick={onExit} className="btn-press focus-ring inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 hover:text-slate-800 mb-6 rounded-lg px-2 py-1 -ml-2">
+          <IconChevronLeft className="w-4 h-4" /> Back
+        </button>
+        <div className="bg-white rounded-2xl border border-slate-200 card-shadow-lg p-7 sm:p-9 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto mb-5">
+            <IconFalling className="w-8 h-8" />
+          </div>
+          <h2 className="font-display font-extrabold text-2xl letter-tighter text-slate-900 mb-2">Falling words</h2>
+          <p className="text-sm text-slate-500 leading-relaxed mb-7">
+            Definitions fall from the top. Pick or type the matching word before they hit the floor. You have {FALL_MAX_LIVES} lives, and it gets faster every level.
+          </p>
+
+          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wide mb-2 text-left">Difficulty</p>
+          <div className="grid grid-cols-3 gap-2 mb-5">
+            {Object.entries(FALL_DIFF).map(([id, d]) => (
+              <button key={id} onClick={() => setDiff(id)}
+                className={classNames("btn-press focus-ring rounded-xl border px-2 py-2.5 text-center transition-colors",
+                  diff === id ? "border-rose-400 bg-rose-50 text-rose-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300")}>
+                <span className="block text-sm font-bold">{d.label}</span>
+                <span className="block text-[11px] opacity-70 mt-0.5">{d.desc}</span>
+              </button>
+            ))}
+          </div>
+
+          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wide mb-2 text-left">How do you answer?</p>
+          <div className="grid grid-cols-2 gap-2 mb-7">
+            {[["pick", "Pick", "Tap the word (or press 1–9)"], ["type", "Type", "Type it and it locks in"]].map(([id, label, sub]) => (
+              <button key={id} onClick={() => setStyle(id)}
+                className={classNames("btn-press focus-ring rounded-xl border px-2 py-2.5 text-center transition-colors",
+                  style === id ? "border-rose-400 bg-rose-50 text-rose-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300")}>
+                <span className="block text-sm font-bold">{label}</span>
+                <span className="block text-[11px] opacity-70 mt-0.5">{sub}</span>
+              </button>
+            ))}
+          </div>
+
+          <button onClick={startGame} className="btn-press focus-ring w-full px-5 py-3 rounded-xl bg-rose-600 text-white text-sm font-bold hover:bg-rose-700">
+            Start game
+          </button>
+          <p className="text-xs text-slate-400 mt-4">
+            {bd ? <>Best on {FALL_DIFF[diff].label}: <span className="font-bold text-slate-600">{bd}</span></> : "No high score on this difficulty yet."}
+            <span className="mx-1.5">&middot;</span>Press <span className="kbd">Esc</span> to pause
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const g = G.current;
+
+  if (phase === "over") {
+    return (
+      <div className="max-w-lg mx-auto px-5 py-12 animate-pop">
+        <div className="bg-white rounded-2xl border border-slate-200 card-shadow-lg p-7 sm:p-9 text-center">
+          <h2 className="font-display font-extrabold text-2xl letter-tighter text-slate-900 mb-1">Game over</h2>
+          <p className="font-display font-extrabold text-5xl text-rose-600 mt-3">{g.score}</p>
+          <p className="text-sm text-slate-500 mt-1">
+            {g.newBest ? <span className="font-bold text-emerald-600">New best on {FALL_DIFF[g.diff].label}!</span> : <>Best on {FALL_DIFF[g.diff].label}: {best[g.diff] || 0}</>}
+          </p>
+          <div className="grid grid-cols-3 gap-3 my-6">
+            <div className="rounded-xl bg-slate-50 py-3"><p className="font-display font-extrabold text-xl text-slate-900">{g.correct}</p><p className="text-[11px] text-slate-400 font-medium">correct</p></div>
+            <div className="rounded-xl bg-slate-50 py-3"><p className="font-display font-extrabold text-xl text-slate-900">{g.maxCombo}</p><p className="text-[11px] text-slate-400 font-medium">best combo</p></div>
+            <div className="rounded-xl bg-slate-50 py-3"><p className="font-display font-extrabold text-xl text-slate-900">{g.level}</p><p className="text-[11px] text-slate-400 font-medium">level</p></div>
+          </div>
+
+          {g.missed.length > 0 && (
+            <div className="text-left mb-6">
+              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wide mb-2">Words to review ({g.missed.length})</p>
+              <div className="rounded-xl border border-slate-200 divide-y divide-slate-100 max-h-64 overflow-y-auto">
+                {g.missed.map((w) => (
+                  <div key={w.id} className="px-4 py-2.5">
+                    <p className="text-sm font-bold text-slate-900">{w.word}</p>
+                    <p className="text-xs text-slate-500 leading-relaxed">{w.definition}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row gap-2.5 justify-center">
+            <button onClick={startGame} className="btn-press focus-ring px-5 py-2.5 rounded-xl bg-rose-600 text-white text-sm font-bold hover:bg-rose-700">Play again</button>
+            <button onClick={() => setPhase("ready")} className="btn-press focus-ring px-5 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-700 text-sm font-bold hover:border-slate-300">Change settings</button>
+            <button onClick={onExit} className="btn-press focus-ring px-5 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-bold hover:bg-slate-700">Back to set</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ----- play / paused -----
+  const live = g.items.filter((i) => i.state === "fall");
+  const bankMap = new Map();
+  live.forEach((i) => i.opts.forEach((o) => bankMap.set(o.id, o)));
+  const bank = [...bankMap.values()].sort((a, b) => a.word.localeCompare(b.word));
+  bankRef.current = bank;
+
+  return (
+    <div className="max-w-3xl mx-auto px-4 sm:px-5 py-6">
+      <div className="flex items-center justify-between mb-4 gap-3">
+        <button onClick={onExit} className="btn-press focus-ring inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 hover:text-slate-800 rounded-lg px-2 py-1 -ml-2">
+          <IconChevronLeft className="w-4 h-4" /> Quit
+        </button>
+        <div className="flex items-center gap-3 sm:gap-4 text-sm">
+          {g.combo >= 2 && <span className="font-extrabold text-amber-500">x{g.combo}</span>}
+          <span className="font-bold text-slate-500">Lv {g.level}</span>
+          <span className="font-extrabold text-slate-900 tabular-nums min-w-[3ch] text-right">{g.score}</span>
+          <span className="flex items-center gap-0.5" aria-label={g.lives + " lives left"}>
+            {Array.from({ length: FALL_MAX_LIVES }).map((_, i) => (
+              <IconHeart key={i} className={classNames("w-5 h-5 transition-colors", i < g.lives ? "text-rose-500" : "text-slate-200")} />
+            ))}
+          </span>
+          <button onClick={() => setPhase(phase === "play" ? "paused" : "play")} className="btn-press focus-ring text-xs font-bold px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-slate-600 hover:border-slate-300">
+            {phase === "play" ? "Pause" : "Resume"}
+          </button>
+        </div>
+      </div>
+
+      <div
+        className="relative overflow-hidden rounded-2xl border border-slate-800 select-none"
+        style={{
+          height: "clamp(340px, 56vh, 520px)",
+          backgroundColor: "#0f172a",
+          backgroundImage: "radial-gradient(circle at 1px 1px, rgba(148,163,184,0.14) 1px, transparent 0), linear-gradient(180deg, #0f172a 0%, #1e293b 100%)",
+          backgroundSize: "22px 22px, auto",
+        }}
+      >
+        {g.items.map((it) => {
+          const falling = it.state === "fall";
+          let tone = "bg-white border-white text-slate-800";
+          if (falling && it.y > 0.85) tone = "bg-red-50 border-red-400 text-slate-800";
+          else if (falling && it.y > 0.68) tone = "bg-amber-50 border-amber-300 text-slate-800";
+          if (it.state === "hit") tone = "bg-emerald-50 border-emerald-400 text-emerald-800";
+          if (it.state === "miss") tone = "bg-red-100 border-red-500 text-red-800";
+          const opacity = it.state === "hit" ? Math.max(0, 1 - it.t / 0.6) : 1;
+          return (
+            <div key={it.uid} className="absolute px-1.5" style={{ left: (it.lane * 100 / FALL_LANES) + "%", width: (100 / FALL_LANES) + "%", top: (it.y * 100) + "%", transform: "translateY(-100%)", opacity }}>
+              <div className={classNames("rounded-xl border-2 px-2.5 py-2 text-center shadow-lg leading-snug", tone)}>
+                {falling ? (
+                  <p className="text-[12px] sm:text-[13px] font-medium">{it.w.definition}</p>
+                ) : it.state === "hit" ? (
+                  <p className="text-[13px] font-extrabold">{it.w.word} <span className="font-bold opacity-70">+{it.pts}</span></p>
+                ) : (
+                  <>
+                    <p className="text-[13px] font-extrabold">{it.w.word}</p>
+                    <p className="text-[11px] opacity-80 leading-snug mt-0.5">{it.w.definition}</p>
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        })}
+
+        {/* floor */}
+        <div className="absolute left-0 right-0 bottom-0 h-1.5 bg-rose-500" style={{ boxShadow: "0 0 18px 4px rgba(244,63,94,0.55)" }} />
+
+        {g.banner && phase === "play" && (
+          <div className="absolute inset-x-0 top-1/3 text-center pointer-events-none animate-pop">
+            <span className="inline-block font-display font-extrabold text-2xl text-white bg-slate-900/70 rounded-full px-5 py-2">{g.banner.text}</span>
+          </div>
+        )}
+
+        {phase === "paused" && (
+          <div className="absolute inset-0 bg-slate-900 flex flex-col items-center justify-center gap-4">
+            <p className="font-display font-extrabold text-2xl text-white">Paused</p>
+            <button onClick={() => setPhase("play")} className="btn-press focus-ring px-5 py-2.5 rounded-xl bg-rose-600 text-white text-sm font-bold hover:bg-rose-700">Resume</button>
+            <p className="text-xs text-slate-400">or press <span className="kbd">Esc</span></p>
+          </div>
+        )}
+      </div>
+
+      <div className={classNames("mt-4", shaking && "animate-shake")}>
+        {style === "pick" ? (
+          <div className="flex flex-wrap justify-center gap-2 min-h-[44px]">
+            {bank.map((w, i) => (
+              <button
+                key={w.id}
+                disabled={phase !== "play"}
+                onClick={() => tryAnswer(w.id)}
+                className={classNames(
+                  "btn-press focus-ring inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl border text-sm font-bold transition-colors",
+                  badId === w.id ? "border-red-400 bg-red-50 text-red-700" : "border-slate-200 bg-white text-slate-800 hover:border-rose-300 hover:bg-rose-50"
+                )}
+              >
+                {i < 9 && <span className="kbd hidden sm:inline">{i + 1}</span>}
+                {w.word}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div>
+            <input
+              ref={inputRef}
+              value={input}
+              disabled={phase !== "play"}
+              onChange={(e) => onType(e.target.value)}
+              onKeyDown={onTypeKey}
+              onBlur={() => { if (phase === "play" && inputRef.current) setTimeout(() => inputRef.current && inputRef.current.focus(), 0); }}
+              autoCapitalize="off" autoCorrect="off" autoComplete="off" spellCheck={false}
+              placeholder="Type the word for a falling definition"
+              className="focus-ring w-full text-center text-lg font-bold bg-white border-2 border-slate-200 focus:border-rose-400 rounded-xl px-4 py-3 placeholder:text-slate-300 placeholder:font-medium placeholder:text-base"
+            />
+            <p className="text-center text-xs text-slate-400 mt-2">It locks in automatically when you spell it right. <span className="kbd">Enter</span> counts a wrong guess.</p>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2839,6 +3309,14 @@ function App() {
 
       {view.screen === "study" && view.mode === "speed" && (
         <SpeedMode
+          setObj={view.setObj}
+          onUpdateStatus={updateStatus}
+          onExit={() => backToOverview(view.pkgId, view.setObj)}
+        />
+      )}
+
+      {view.screen === "study" && view.mode === "falling" && (
+        <FallingMode
           setObj={view.setObj}
           onUpdateStatus={updateStatus}
           onExit={() => backToOverview(view.pkgId, view.setObj)}
