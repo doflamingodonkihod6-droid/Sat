@@ -654,6 +654,19 @@ function Dashboard({ data, progress, onOpenPackage, onOpenMock, onOpenReading, o
         </button>
       </div>
 
+      <div className="mb-8 animate-in">
+        <div className="flex items-baseline justify-between mb-3">
+          <h2 className="font-display font-bold text-lg text-slate-900">SAT Writing practice</h2>
+          <span className="text-sm text-slate-400">With answer keys</span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <PracticeCard accent="teal" eyebrow="Standard English Conventions" title="Grammar" icon={<IconPencilCheck className="w-5 h-5" />} stats={grammar} onOpen={onOpenGrammar}
+            desc={grammar.total + " SAT-style questions on punctuation, verbs, pronouns and modifiers."} />
+          <PracticeCard accent="amber" eyebrow="Rhetorical Synthesis" title="Student notes" icon={<IconBookOpen className="w-5 h-5" />} stats={notes} onOpen={onOpenNotes}
+            desc={notes.total + " questions on turning a student’s notes into the sentence that meets a goal."} />
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
         {data.packages.map((pkg, i) => (
           <PackageCard key={pkg.id} pkg={pkg} progress={progress} onOpen={onOpenPackage} index={i} />
@@ -680,28 +693,6 @@ function Dashboard({ data, progress, onOpenPackage, onOpenMock, onOpenReading, o
           <p className="text-sm text-slate-500">{reading.total} real SAT questions with answer key, tips and timing.{reading.answered ? " " + reading.answered + " answered, " + reading.correct + " correct." : ""}</p>
         </div>
         <span className="text-sm font-semibold text-blue-600 shrink-0">{reading.answered && reading.answered < reading.total ? "Continue" : "Open"} &rarr;</span>
-      </button>
-
-      <button onClick={onOpenGrammar} className="mt-4 w-full text-left rounded-2xl border border-slate-200 bg-white p-6 flex items-center gap-4 hover:border-teal-400 hover:shadow-sm transition animate-in focus-ring">
-        <div className="w-11 h-11 rounded-xl bg-teal-50 flex items-center justify-center text-teal-600 shrink-0">
-          <IconPencilCheck className="w-5 h-5" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="font-display font-bold text-slate-900">Grammar: Standard English Conventions</p>
-          <p className="text-sm text-slate-500">{grammar.total} SAT-style questions on punctuation, verbs, pronouns and modifiers, with answer key.{grammar.answered ? " " + grammar.answered + " answered, " + grammar.correct + " correct." : ""}</p>
-        </div>
-        <span className="text-sm font-semibold text-blue-600 shrink-0">{grammar.answered && grammar.answered < grammar.total ? "Continue" : "Open"} &rarr;</span>
-      </button>
-
-      <button onClick={onOpenNotes} className="mt-4 w-full text-left rounded-2xl border border-slate-200 bg-white p-6 flex items-center gap-4 hover:border-amber-400 hover:shadow-sm transition animate-in focus-ring">
-        <div className="w-11 h-11 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600 shrink-0">
-          <IconBookOpen className="w-5 h-5" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="font-display font-bold text-slate-900">Notes: Rhetorical Synthesis</p>
-          <p className="text-sm text-slate-500">{notes.total} SAT-style questions on using a student&rsquo;s notes to meet a goal, with answer key.{notes.answered ? " " + notes.answered + " answered, " + notes.correct + " correct." : ""}</p>
-        </div>
-        <span className="text-sm font-semibold text-blue-600 shrink-0">{notes.answered && notes.answered < notes.total ? "Continue" : "Open"} &rarr;</span>
       </button>
 
       <button onClick={onOpenBattle} className="mt-4 w-full text-left rounded-2xl border border-slate-200 bg-white p-6 flex items-center gap-4 hover:border-rose-400 hover:shadow-sm transition animate-in focus-ring">
@@ -2913,6 +2904,145 @@ function grammarStats(answers, list) {
 function grammarRich(s) {
   return s.split("*").map((part, i) => (i % 2 ? <em key={i}>{part}</em> : part));
 }
+// Shared practice screen for Grammar and Notes: passage on the left (sticky on wide screens),
+// question and choices on the right, a clickable status strip, and a text-size control.
+const PV_SIZES = [
+  { p: "text-[16px] leading-[1.75]", o: "text-[15px]" },
+  { p: "text-[18px] leading-[1.85]", o: "text-[16.5px]" },
+  { p: "text-[20.5px] leading-[1.9]", o: "text-[18px]" },
+];
+function PracticeView({ current, qs, queue, pos, setPos, answers, chosen, choose, goNext, goPrev, onBack, accent, passageLabel, passage, prompt, goalStyle }) {
+  const [fs, setFs] = useState(() => { try { const v = parseInt(localStorage.getItem("vocabify_qfs"), 10); return v >= 0 && v <= 2 ? v : 1; } catch (e) { return 1; } });
+  function setSize(v) { setFs(v); try { localStorage.setItem("vocabify_qfs", String(v)); } catch (e) { /* ignore */ } }
+  const z = PV_SIZES[fs];
+  const isLast = pos === queue.length - 1;
+  const correct = chosen === current.answer;
+  const done = queue.filter((n) => answers[n]).length;
+  const A = accent === "amber"
+    ? { chip: "bg-amber-50 text-amber-700", goal: "border-amber-200 bg-amber-50/60", num: "bg-amber-500" }
+    : { chip: "bg-teal-50 text-teal-700", goal: "border-teal-200 bg-teal-50/60", num: "bg-teal-600" };
+
+  return (
+    <div className="max-w-6xl mx-auto px-5 sm:px-8 py-6 pb-20">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        {onBack}
+        <div className="flex items-center gap-4">
+          <div className="inline-flex items-center rounded-lg border border-slate-200 bg-white overflow-hidden" role="group" aria-label="Text size">
+            {["A", "A", "A"].map((l, i) => (
+              <button key={i} onClick={() => setSize(i)} aria-label={["Small", "Medium", "Large"][i] + " text"} aria-pressed={fs === i}
+                className={classNames("focus-ring px-2.5 py-1 font-bold", fs === i ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-50")} style={{ fontSize: 11 + i * 2.5 }}>{l}</button>
+            ))}
+          </div>
+          <span className="text-sm font-semibold text-slate-500 tabular-nums">Question {current.n} <span className="text-slate-300">&middot;</span> {pos + 1} of {queue.length}</span>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 mb-6 flex flex-wrap items-center gap-1.5" aria-label="Question navigator">
+        {queue.map((n, i) => {
+          const a = answers[n];
+          const q = qs.find((x) => x.n === n);
+          let cls = "bg-slate-100 text-slate-500 hover:bg-slate-200";
+          if (a) cls = a === q.answer ? "bg-emerald-500 text-white" : "bg-red-500 text-white";
+          return (
+            <button key={n} onClick={() => setPos(i)} aria-label={"Go to question " + n} aria-current={i === pos ? "step" : undefined}
+              className={classNames("focus-ring h-7 min-w-[28px] px-1 rounded-md text-xs font-bold tabular-nums transition", cls, i === pos ? "ring-2 ring-offset-1 ring-blue-600" : "")}>{n}</button>
+          );
+        })}
+        <span className="ml-auto pl-3 text-xs font-semibold text-slate-400 tabular-nums">{done}/{queue.length} done</span>
+      </div>
+
+      <div key={current.n} className="animate-in grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+        <section className="bg-white rounded-2xl border border-slate-200 card-shadow p-6 sm:p-8 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6.5rem)] lg:overflow-y-auto">
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-xs font-bold uppercase tracking-wider text-slate-400">{passageLabel}</p>
+            <span className={classNames("text-xs font-bold px-2.5 py-1 rounded-full", A.chip)}>{current.category}</span>
+          </div>
+          <div className={classNames("font-serif text-slate-800", z.p)}>{passage(chosen, correct)}</div>
+        </section>
+
+        <section className="space-y-4">
+          <div className={classNames("rounded-2xl border p-5 sm:p-6", A.goal)}>
+            <div className="flex items-start gap-3">
+              <span className={classNames("w-7 h-7 rounded-lg text-white text-sm font-bold flex items-center justify-center shrink-0", A.num)}>{current.n}</span>
+              <p className="font-display font-bold text-slate-900 leading-snug text-[17px]">{prompt}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3">
+            {current.options.map((o) => {
+              const isRight = o.id === current.answer;
+              const isChosen = o.id === chosen;
+              let cls = "border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50/50 text-slate-800";
+              let badge = "bg-slate-100 text-slate-500";
+              if (chosen) {
+                if (isRight) { cls = "border-emerald-400 bg-emerald-50 text-emerald-950"; badge = "bg-emerald-500 text-white"; }
+                else if (isChosen) { cls = "border-red-300 bg-red-50 text-red-950"; badge = "bg-red-500 text-white"; }
+                else { cls = "border-slate-200 bg-white text-slate-400"; badge = "bg-slate-100 text-slate-400"; }
+              }
+              return (
+                <button key={o.id} onClick={() => choose(o.id)} disabled={!!chosen} aria-label={"Option " + o.id}
+                  className={classNames("btn-press focus-ring text-left flex items-start gap-3.5 px-4 py-4 rounded-xl border-2 leading-relaxed", z.o, cls)}>
+                  <span className={classNames("w-7 h-7 rounded-lg text-sm font-bold flex items-center justify-center shrink-0", badge)}>
+                    {chosen && isRight ? <IconCheck className="w-4 h-4" /> : chosen && isChosen ? <IconX className="w-4 h-4" /> : o.id}
+                  </span>
+                  <span className="font-serif pt-0.5">{grammarRich(o.text)}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {chosen && (
+            <div className={classNames("rounded-xl px-4 py-3 text-sm font-semibold animate-pop border", correct ? "bg-emerald-50 text-emerald-800 border-emerald-200" : "bg-red-50 text-red-800 border-red-200")}>
+              {correct ? "Correct." : "Not quite. You chose " + chosen + "; the correct answer is " + current.answer + "."}
+            </div>
+          )}
+
+          <div className="flex items-center justify-between gap-3 pt-1">
+            <button onClick={goPrev} disabled={pos === 0} className={classNames("btn-press focus-ring inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-semibold border bg-white", pos === 0 ? "border-slate-100 text-slate-300 cursor-not-allowed" : "border-slate-200 text-slate-600 hover:border-slate-300 hover:text-slate-900")}>
+              <IconChevronLeft className="w-4 h-4" /> Prev
+            </button>
+            <button onClick={goNext} disabled={!chosen} className={classNames("btn-press focus-ring inline-flex items-center gap-1.5 px-6 py-2.5 rounded-xl text-sm font-bold transition-colors", chosen ? "bg-blue-600 text-white hover:bg-blue-700 shadow-sm shadow-blue-600/30" : "bg-slate-100 text-slate-400 cursor-not-allowed")}>
+              {isLast ? "See results" : "Next"} <IconChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+          <p className="hidden sm:block text-xs text-slate-400 text-center">
+            Press <span className="kbd">A</span>&ndash;<span className="kbd">D</span> to answer, <span className="kbd">&larr;</span> <span className="kbd">&rarr;</span> to move.
+          </p>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function PracticeCard({ title, eyebrow, desc, stats, accent, icon, onOpen }) {
+  const C = accent === "amber"
+    ? { box: "bg-amber-50 text-amber-600", hover: "hover:border-amber-400", bar: "bg-amber-500", eyebrow: "text-amber-600" }
+    : { box: "bg-teal-50 text-teal-600", hover: "hover:border-teal-400", bar: "bg-teal-500", eyebrow: "text-teal-600" };
+  const pct = stats.total ? Math.round((stats.answered / stats.total) * 100) : 0;
+  const acc = stats.answered ? Math.round((stats.correct / stats.answered) * 100) : 0;
+  const label = !stats.answered ? "Start" : stats.answered < stats.total ? "Continue" : "Review";
+  return (
+    <button onClick={onOpen} className={classNames("text-left rounded-2xl border border-slate-200 bg-white p-6 flex flex-col gap-4 hover:shadow-sm transition focus-ring", C.hover)}>
+      <div className="flex items-start gap-4">
+        <div className={classNames("w-11 h-11 rounded-xl flex items-center justify-center shrink-0", C.box)}>{icon}</div>
+        <div className="min-w-0">
+          <p className={classNames("text-[11px] font-bold uppercase tracking-wider mb-0.5", C.eyebrow)}>{eyebrow}</p>
+          <p className="font-display font-bold text-slate-900 text-[17px] leading-snug">{title}</p>
+        </div>
+      </div>
+      <p className="text-sm text-slate-500 leading-relaxed">{desc}</p>
+      <div>
+        <div className="h-2 rounded-full bg-slate-100 overflow-hidden"><div className={classNames("h-full rounded-full", C.bar)} style={{ width: pct + "%" }} /></div>
+        <div className="flex items-center justify-between mt-2 text-xs text-slate-500">
+          <span className="tabular-nums">{stats.answered} / {stats.total} answered{stats.answered ? " · " + acc + "% correct" : ""}</span>
+          <span className="text-sm font-semibold text-blue-600">{label} &rarr;</span>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+
 // Renders the passage with the blank shown as a gap, or filled in once answered
 function GrammarPassage({ text, fill, state }) {
   const parts = text.split("[[blank]]");
@@ -2926,7 +3056,7 @@ function GrammarPassage({ text, fill, state }) {
     const cls = state === "right" ? "bg-emerald-100 text-emerald-900" : "bg-red-100 text-red-900";
     blank = <span className={classNames("rounded px-1 font-semibold", cls)}>{grammarRich(fillText)}</span>;
   }
-  return <p className="font-serif text-[17px] leading-[1.85] text-slate-800">{grammarRich(parts[0])}{blank}{grammarRich(after)}</p>;
+  return <p>{grammarRich(parts[0])}{blank}{grammarRich(after)}</p>;
 }
 
 function GrammarPractice({ onExit }) {
@@ -3160,89 +3290,15 @@ function GrammarPractice({ onExit }) {
 
   // ----------------------------- PRACTICE -----------------------------
   if (!current) return null;
-  const isLast = pos === queue.length - 1;
-  const correct = chosen === current.answer;
-  const pct = ((pos + (chosen ? 1 : 0)) / queue.length) * 100;
+  const backLink = backBtn("Overview", () => { setScreen("intro"); top(); });
   const chosenOpt = chosen ? current.options.find((o) => o.id === chosen) : null;
-
   return (
-    <div className="max-w-3xl mx-auto px-5 sm:px-8 py-8 pb-16">
-      <div className="flex items-center justify-between mb-4">
-        {backBtn("Overview", () => { setScreen("intro"); top(); })}
-        <span className="text-sm font-semibold text-slate-500">Question {current.n}{queue.length !== qs.length ? " · " + (pos + 1) + " of " + queue.length : " of " + qs.length}</span>
-      </div>
-
-      <div className="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden mb-6">
-        <div className="segbar-seg h-full bg-blue-600 rounded-full" style={{ width: pct + "%" }} />
-      </div>
-
-      <div key={current.n} className="animate-in space-y-5">
-        <div className="bg-white rounded-2xl border border-slate-200 card-shadow p-6 sm:p-7">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Passage</p>
-            <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-teal-50 text-teal-700">{current.category}</span>
-          </div>
-          <GrammarPassage text={current.text} fill={chosenOpt ? chosenOpt.text : null} state={chosen ? (correct ? "right" : "wrong") : null} />
-        </div>
-
-        <div className="bg-white rounded-2xl border border-slate-200 card-shadow p-6 sm:p-7">
-          <div className="flex items-center gap-2.5 mb-4">
-            <span className="w-7 h-7 rounded-lg bg-blue-600 text-white text-sm font-bold flex items-center justify-center">{current.n}</span>
-            <p className="font-display font-bold text-slate-900 leading-snug">Which choice completes the text so that it conforms to the conventions of Standard English?</p>
-          </div>
-
-          <div className="grid grid-cols-1 gap-2.5">
-            {current.options.map((o) => {
-              const isRight = o.id === current.answer;
-              const isChosen = o.id === chosen;
-              let cls = "border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50/50 text-slate-700";
-              let badge = "bg-slate-100 text-slate-500";
-              if (chosen) {
-                if (isRight) { cls = "border-emerald-300 bg-emerald-50 text-emerald-900"; badge = "bg-emerald-500 text-white"; }
-                else if (isChosen) { cls = "border-red-300 bg-red-50 text-red-900"; badge = "bg-red-500 text-white"; }
-                else { cls = "border-slate-200 bg-white text-slate-400"; badge = "bg-slate-100 text-slate-400"; }
-              }
-              return (
-                <button
-                  key={o.id}
-                  onClick={() => choose(o.id)}
-                  disabled={!!chosen}
-                  aria-label={"Option " + o.id}
-                  className={classNames("btn-press focus-ring text-left flex items-start gap-3 px-4 py-3.5 rounded-xl border text-[15px] leading-relaxed", cls)}
-                >
-                  <span className={classNames("w-6 h-6 rounded-md text-xs font-bold flex items-center justify-center shrink-0 mt-0.5", badge)}>
-                    {chosen && isRight ? <IconCheck className="w-3.5 h-3.5" /> : chosen && isChosen ? <IconX className="w-3.5 h-3.5" /> : o.id}
-                  </span>
-                  <span className="font-serif">{grammarRich(o.text)}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          {chosen && (
-            <div className={classNames("mt-5 rounded-xl px-4 py-3 text-sm font-semibold animate-pop", correct ? "bg-emerald-50 text-emerald-800 border border-emerald-200" : "bg-red-50 text-red-800 border border-red-200")}>
-              {correct ? "Correct." : "Not quite. The correct answer is " + current.answer + "."}
-            </div>
-          )}
-
-          <div className="mt-6 flex items-center justify-between gap-3">
-            <button onClick={goPrev} disabled={pos === 0} className={classNames("btn-press focus-ring inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-semibold border", pos === 0 ? "border-slate-100 text-slate-300 cursor-not-allowed" : "border-slate-200 text-slate-600 hover:border-slate-300 hover:text-slate-900")}>
-              <IconChevronLeft className="w-4 h-4" /> Prev
-            </button>
-            <button
-              onClick={goNext}
-              disabled={!chosen}
-              className={classNames("btn-press focus-ring inline-flex items-center gap-1.5 px-6 py-2.5 rounded-xl text-sm font-bold transition-colors", chosen ? "bg-blue-600 text-white hover:bg-blue-700 shadow-sm shadow-blue-600/30" : "bg-slate-100 text-slate-400 cursor-not-allowed")}
-            >
-              {isLast ? "See results" : "Next"} <IconChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-          <p className="hidden sm:block text-xs text-slate-400 mt-4 text-center">
-            Press <span className="kbd">A</span>&ndash;<span className="kbd">D</span> to answer, <span className="kbd">&larr;</span> <span className="kbd">&rarr;</span> to move.
-          </p>
-        </div>
-      </div>
-    </div>
+    <PracticeView
+      current={current} qs={qs} queue={queue} pos={pos} setPos={(i) => { setPos(i); top(); }} answers={answers} chosen={chosen}
+      choose={choose} goNext={goNext} goPrev={goPrev} onBack={backLink} accent="teal" passageLabel="Passage"
+      passage={(ch, ok) => <GrammarPassage text={current.text} fill={chosenOpt ? chosenOpt.text : null} state={ch ? (ok ? "right" : "wrong") : null} />}
+      prompt="Which choice completes the text so that it conforms to the conventions of Standard English?"
+    />
   );
 }
 
@@ -3504,90 +3560,18 @@ function NotesPractice({ onExit }) {
 
   // ----------------------------- PRACTICE -----------------------------
   if (!current) return null;
-  const isLast = pos === queue.length - 1;
-  const correct = chosen === current.answer;
-  const pct = ((pos + (chosen ? 1 : 0)) / queue.length) * 100;
-  
+  const backLink = backBtn("Overview", () => { setScreen("intro"); top(); });
   return (
-    <div className="max-w-3xl mx-auto px-5 sm:px-8 py-8 pb-16">
-      <div className="flex items-center justify-between mb-4">
-        {backBtn("Overview", () => { setScreen("intro"); top(); })}
-        <span className="text-sm font-semibold text-slate-500">Question {current.n}{queue.length !== qs.length ? " · " + (pos + 1) + " of " + queue.length : " of " + qs.length}</span>
-      </div>
-
-      <div className="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden mb-6">
-        <div className="segbar-seg h-full bg-blue-600 rounded-full" style={{ width: pct + "%" }} />
-      </div>
-
-      <div key={current.n} className="animate-in space-y-5">
-        <div className="bg-white rounded-2xl border border-slate-200 card-shadow p-6 sm:p-7">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Student&rsquo;s notes</p>
-            <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-amber-50 text-amber-700">{current.category}</span>
-          </div>
-          <ul className="list-disc pl-5 space-y-1.5 font-serif text-[17px] leading-[1.7] text-slate-800 marker:text-slate-400">
-            {current.notes.map((t, i) => <li key={i}>{grammarRich(t)}</li>)}
-          </ul>
-        </div>
-
-        <div className="bg-white rounded-2xl border border-slate-200 card-shadow p-6 sm:p-7">
-          <div className="flex items-center gap-2.5 mb-4">
-            <span className="w-7 h-7 rounded-lg bg-blue-600 text-white text-sm font-bold flex items-center justify-center">{current.n}</span>
-            <p className="font-display font-bold text-slate-900 leading-snug">{grammarRich(current.goal)}</p>
-          </div>
-
-          <div className="grid grid-cols-1 gap-2.5">
-            {current.options.map((o) => {
-              const isRight = o.id === current.answer;
-              const isChosen = o.id === chosen;
-              let cls = "border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50/50 text-slate-700";
-              let badge = "bg-slate-100 text-slate-500";
-              if (chosen) {
-                if (isRight) { cls = "border-emerald-300 bg-emerald-50 text-emerald-900"; badge = "bg-emerald-500 text-white"; }
-                else if (isChosen) { cls = "border-red-300 bg-red-50 text-red-900"; badge = "bg-red-500 text-white"; }
-                else { cls = "border-slate-200 bg-white text-slate-400"; badge = "bg-slate-100 text-slate-400"; }
-              }
-              return (
-                <button
-                  key={o.id}
-                  onClick={() => choose(o.id)}
-                  disabled={!!chosen}
-                  aria-label={"Option " + o.id}
-                  className={classNames("btn-press focus-ring text-left flex items-start gap-3 px-4 py-3.5 rounded-xl border text-[15px] leading-relaxed", cls)}
-                >
-                  <span className={classNames("w-6 h-6 rounded-md text-xs font-bold flex items-center justify-center shrink-0 mt-0.5", badge)}>
-                    {chosen && isRight ? <IconCheck className="w-3.5 h-3.5" /> : chosen && isChosen ? <IconX className="w-3.5 h-3.5" /> : o.id}
-                  </span>
-                  <span className="font-serif">{grammarRich(o.text)}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          {chosen && (
-            <div className={classNames("mt-5 rounded-xl px-4 py-3 text-sm font-semibold animate-pop", correct ? "bg-emerald-50 text-emerald-800 border border-emerald-200" : "bg-red-50 text-red-800 border border-red-200")}>
-              {correct ? "Correct." : "Not quite. The correct answer is " + current.answer + "."}
-            </div>
-          )}
-
-          <div className="mt-6 flex items-center justify-between gap-3">
-            <button onClick={goPrev} disabled={pos === 0} className={classNames("btn-press focus-ring inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-semibold border", pos === 0 ? "border-slate-100 text-slate-300 cursor-not-allowed" : "border-slate-200 text-slate-600 hover:border-slate-300 hover:text-slate-900")}>
-              <IconChevronLeft className="w-4 h-4" /> Prev
-            </button>
-            <button
-              onClick={goNext}
-              disabled={!chosen}
-              className={classNames("btn-press focus-ring inline-flex items-center gap-1.5 px-6 py-2.5 rounded-xl text-sm font-bold transition-colors", chosen ? "bg-blue-600 text-white hover:bg-blue-700 shadow-sm shadow-blue-600/30" : "bg-slate-100 text-slate-400 cursor-not-allowed")}
-            >
-              {isLast ? "See results" : "Next"} <IconChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-          <p className="hidden sm:block text-xs text-slate-400 mt-4 text-center">
-            Press <span className="kbd">A</span>&ndash;<span className="kbd">D</span> to answer, <span className="kbd">&larr;</span> <span className="kbd">&rarr;</span> to move.
-          </p>
-        </div>
-      </div>
-    </div>
+    <PracticeView
+      current={current} qs={qs} queue={queue} pos={pos} setPos={(i) => { setPos(i); top(); }} answers={answers} chosen={chosen}
+      choose={choose} goNext={goNext} goPrev={goPrev} onBack={backLink} accent="amber" passageLabel="Student’s notes"
+      passage={() => (
+        <ul className="list-disc pl-5 space-y-2.5 marker:text-slate-400">
+          {current.notes.map((t, i) => <li key={i}>{grammarRich(t)}</li>)}
+        </ul>
+      )}
+      prompt={current.goal}
+    />
   );
 }
 
