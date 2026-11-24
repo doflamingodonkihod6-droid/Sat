@@ -625,7 +625,7 @@ function PackageCard({ pkg, progress, onOpen, index }) {
   );
 }
 
-function Dashboard({ data, progress, onOpenPackage, onOpenMock, onOpenReading, onOpenGrammar, onOpenNotes, onOpenTransitions, onOpenBattle, onOpenReels, onReview }) {
+function Dashboard({ data, progress, onOpenPackage, onOpenMock, onOpenReading, onOpenGrammar, onOpenNotes, onOpenTransitions, onOpenLessons, onOpenBattle, onOpenReels, onReview }) {
   const mockState = mockSummary();
   const reading = readingStats(readingLoad());
   const grammar = grammarStats(grammarLoad());
@@ -670,6 +670,7 @@ function Dashboard({ data, progress, onOpenPackage, onOpenMock, onOpenReading, o
           <span className="text-sm text-slate-400">With answer keys</span>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <LessonsCard onOpen={onOpenLessons} />
           <PracticeCard accent="teal" eyebrow="Standard English Conventions" title="Grammar" icon={<IconPencilCheck className="w-5 h-5" />} stats={grammar} onOpen={onOpenGrammar}
             desc={grammar.total + " SAT-style questions on punctuation, verbs, pronouns and modifiers."} />
           <PracticeCard accent="amber" eyebrow="Rhetorical Synthesis" title="Student notes" icon={<IconBookOpen className="w-5 h-5" />} stats={notes} onOpen={onOpenNotes}
@@ -4479,6 +4480,328 @@ function ReelsFeed({ onExit, onUpdateStatus }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Grammar lessons: the SAT rule areas, each with the rule, wrong/right examples and a test trick.
+// ^^text^^ marks the part of an example that matters.
+// ---------------------------------------------------------------------------
+const GRAMMAR_LESSONS = [
+  { id: "periods-semicolons", group: "Boundaries", title: "Periods and semicolons",
+    summary: "A period and a semicolon do the same job, so you will never be asked to choose between them.",
+    rules: ["Use either one between two complete sentences.", "Put a semicolon (or period) before a transition such as however, therefore or moreover when it opens a new clause: “; however,”.", "Read to the end of every sentence. Boundary errors hide in long sentences where a second sentence starts without warning."],
+    examples: [["The museum opened in 1998^^, it^^ now holds 40,000 objects.", "The museum opened in 1998^^; it^^ now holds 40,000 objects."], ["The study was small^^, however,^^ its results were striking.", "The study was small^^; however,^^ its results were striking."]],
+    trick: "If two choices are a period and a semicolon, they are equal, so both are wrong or both are right. Look at the choice that is different." },
+  { id: "colons-dashes", group: "Boundaries", title: "Colons and dashes",
+    summary: "A colon or single dash introduces a list or an explanation, and it must follow a complete sentence.",
+    rules: ["The SAT treats colons and single dashes as identical. What follows can be a full sentence or a fragment.", "What comes before must stand alone as a complete thought. “They made” is not one; “They made a discovery” is.", "Never place a colon right after a verb, a preposition, “such as”, “including” or “of”.", "A colon between two complete sentences works like a period. Correct answers often hide behind a colon because fewer students know this."],
+    examples: [["The kit includes^^:^^ a map, a compass and a whistle.", "The kit includes three tools^^:^^ a map, a compass and a whistle."], ["The garden thrived^^, the soil^^ was rich and the rain steady.", "The garden thrived^^: the soil^^ was rich and the rain steady."]],
+    trick: "Cover everything after the colon. If what is left cannot stand alone, the colon is wrong." },
+  { id: "comma-fanboys", group: "Boundaries", title: "Comma + FANBOYS and comma splices",
+    summary: "A comma plus for, and, nor, but, or, yet or so joins two complete sentences. With no second subject, there is no comma.",
+    rules: ["Comma + FANBOYS = period = semicolon. Plug in a period to check that both sides are complete sentences.", "Two sentences joined by only a comma is a comma splice, always wrong. Red flag: a comma followed by it, they, he, she, you or I.", "If the second part has no subject of its own, drop the comma: “The film ran long but held our attention.”", "And and but are tested most. So and yet appear sometimes; or, nor and for are rare."],
+    examples: [["The bridge is old^^, it^^ still carries 9,000 cars a day.", "The bridge is old^^, but it^^ still carries 9,000 cars a day."], ["The bridge is old^^, but carries^^ 9,000 cars a day.", "The bridge is old^^ but carries^^ 9,000 cars a day."]],
+    trick: "Replace comma + and/but with a period. If the second half is not a sentence, remove the comma." },
+  { id: "dependent-clauses", group: "Boundaries", title: "Commas and dependent clauses",
+    summary: "A dependent clause cannot stand alone. When it comes first, a comma follows it.",
+    rules: ["Dependent clauses begin with words like although, because, when, while, since, until, before, after and if.", "Order: dependent clause, comma, then a full sentence.", "A dependent clause by itself is a fragment.", "When the dependent clause comes second, a comma is usually not needed."],
+    examples: [["Although the trail was steep^^ hikers^^ reached the summit by noon.", "Although the trail was steep^^, hikers^^ reached the summit by noon."], ["Because the lab lost funding^^. Researchers^^ halted the project.", "Because the lab lost funding^^, researchers^^ halted the project."]],
+    trick: "Spot the subordinating word at the start of a sentence, then find where its clause ends. That is where the comma goes." },
+  { id: "nonessential", group: "Punctuation", title: "Non-essential information",
+    summary: "Extra information that can be removed without changing the meaning is set off with a matching pair of marks.",
+    rules: ["Use two commas, two dashes or two parentheses. Never mix them.", "Cross the phrase out. If the sentence still works, it needs the pair.", "Single words like however and though are set off with commas only, not dashes.", "A comma before an opening parenthesis is always wrong, and a comma before a closing one is almost always wrong."],
+    examples: [["The tower^^, which is 90 meters tall^^ attracts visitors.", "The tower^^, which is 90 meters tall,^^ attracts visitors."], ["The tower^^, (which is 90 meters tall)^^ attracts visitors.", "The tower^^ (which is 90 meters tall)^^ attracts visitors."]],
+    trick: "Count the marks. One comma and one dash, or a lone comma, means the choice is wrong." },
+  { id: "names-titles", group: "Punctuation", title: "Commas with names and titles",
+    summary: "A name or title is either essential (no commas) or non-essential (two commas). One comma is never right.",
+    rules: ["Cross out the name. If the sentence breaks, the name is essential: no commas.", "If the sentence still makes sense, the name is extra information: a comma before and after.", "A single comma before a name in the middle of a sentence can be eliminated at once.", "A comma after a name can still be needed for another reason, such as ending an opening phrase."],
+    examples: [["Students taught by physics teacher^^, Dr. Lee,^^ scored higher.", "Students taught by physics teacher^^ Dr. Lee^^ scored higher."], ["Students taught by the school’s only chemistry teacher^^ Dr. Lee^^ scored higher.", "Students taught by the school’s only chemistry teacher^^, Dr. Lee,^^ scored higher."]],
+    trick: "If removing the name leaves “taught by physics teacher scored higher”, it cannot be removed." },
+  { id: "comma-rules", group: "Punctuation", title: "Other comma uses and misuses",
+    summary: "Commas separate list items and some adjectives, and they are banned in several places the test loves.",
+    rules: ["Use commas between three or more list items. The comma before the final “and” is optional and not tested.", "Use a comma between adjectives that could be swapped or joined by and: a quiet, cozy room. No comma when the order is fixed: a stunning coral reef.", "No comma before or after a preposition (of, to, by, from, for, about, with, in, on, at).", "No comma between subject and verb, even when the subject is very long.", "No comma between two items joined by and. Plug in a period to test.", "No comma before or after that, and none when that is dropped: “The snow used to build…”.", "No comma between an adjective and the noun it describes."],
+    examples: [["The recipe calls for^^ flour sugar^^ and eggs.", "The recipe calls for^^ flour, sugar,^^ and eggs."], ["The oldest building on campus^^, is^^ the library.", "The oldest building on campus^^ is^^ the library."], ["She visited Rome^^, and Paris^^ last spring.", "She visited Rome^^ and Paris^^ last spring."]],
+    trick: "Most wrong commas split things that belong together: subject/verb, verb/object, preposition/object." },
+  { id: "apostrophes", group: "Punctuation", title: "Apostrophes",
+    summary: "On a noun, an apostrophe shows possession. On a pronoun, it signals a contraction.",
+    rules: ["Singular noun: add ’s (the cell’s DNA, the boss’s office). Regular plural: add the apostrophe after the s (the cells’ DNA). Irregular plural: add ’s (the children’s books).", "Two nouns in a row where the first owns the second follow the pattern noun’s noun, with no apostrophe on the second.", "Its belongs to it; it’s means it is. Its’ does not exist.", "Their belongs to them; they’re means they are; there is a place.", "Whose belongs to who; who’s means who is."],
+    examples: [["The library^^s^^ collection holds 3 million volumes.", "The library^^’s^^ collection holds 3 million volumes."], ["The lizard dropped ^^it’s^^ tail to escape.", "The lizard dropped ^^its^^ tail to escape."]],
+    trick: "Expand the contraction. If “it is” or “they are” does not fit, remove the apostrophe." },
+  { id: "question-marks", group: "Punctuation", title: "Question marks",
+    summary: "Direct questions end with a question mark. Questions folded into a statement end with a period.",
+    rules: ["A direct question stands apart from the main sentence, often after a colon: use a question mark.", "An indirect question is part of a statement and keeps statement word order: use a period."],
+    examples: [["The survey asks one thing: how often do residents ride the bus^^.^^", "The survey asks one thing: how often do residents ride the bus^^?^^"], ["The survey asks how often residents ride the bus^^?^^", "The survey asks how often residents ride the bus^^.^^"]],
+    trick: "If “do” or “does” leads the question, it is direct. If the question is folded into the sentence, it is indirect." },
+  { id: "pronouns-nouns", group: "Form", title: "Pronouns and nouns",
+    summary: "A pronoun must match the noun it replaces in number, and the test checks people versus things.",
+    rules: ["Singular: he, she, it, its, itself. Plural: they, them, their, themselves. The SAT does not use singular “they”.", "The noun a pronoun refers to may sit in an earlier sentence, so look back.", "Who and whom are for people; which is for things.", "Whom follows a preposition (to whom). It never comes directly before a verb: “who gained”.", "Nouns must agree too: “are examples”, not “are an example”."],
+    examples: [["Solar panels have dropped in price. ^^It has^^ become widely available.", "Solar panels have dropped in price. ^^They have^^ become widely available."], ["She is a teacher ^^whom taught^^ me to write.", "She is a teacher ^^who taught^^ me to write."]],
+    trick: "Circle the noun the pronoun points to, decide if it is singular or plural, and match it." },
+  { id: "subject-verb", group: "Form", title: "Subject-verb agreement",
+    summary: "The verb agrees with its true subject, not with the noun closest to it.",
+    rules: ["Singular verbs end in -s (it works); plural verbs do not (they work). To be: is/was singular, are/were plural.", "Cross out prepositional phrases and non-essential clauses between the subject and verb.", "Two subjects joined by and are plural.", "Collective nouns (team, group, government) are singular. Each and every are singular.", "There is takes a singular noun; there are takes a plural. The verb can come before the subject: “In the box sit two keys”."],
+    examples: [["The price of tomatoes^^ have^^ risen.", "The price of tomatoes^^ has^^ risen."], ["The mayor and the governor^^ is^^ attending.", "The mayor and the governor^^ are^^ attending."]],
+    trick: "Choices in different tenses can be an agreement question in disguise. Find the subject first." },
+  { id: "verb-tense", group: "Form", title: "Verb tense and form",
+    summary: "Keep tenses consistent, and match each tense to its clue words.",
+    rules: ["Match the nearby verbs: present stays present, past stays past.", "Correct answers are usually simple past or present. Complex forms like “would have done” are usually wrong.", "Present perfect (has/have + verb): began in the past and continues now. Clues: for, since.", "Simple past: a finished action at a specific time (in 1962).", "Past perfect (had + verb): the earlier of two past actions, and required after “by the time”.", "Active voice usually wins. Passive is right only when the grammar needs it.", "To or -ing after a verb (“attempted to”) is decided by ear."],
+    examples: [["Dr. Ito ^^has published^^ her first paper in 2004.", "Dr. Ito ^^published^^ her first paper in 2004."], ["By the time the bus arrived, we ^^waited^^ for an hour.", "By the time the bus arrived, we ^^had waited^^ for an hour."], ["Rome ^^is^^ a trading hub for centuries.", "Rome ^^has been^^ a trading hub for centuries."]],
+    trick: "Look for clue words: for/since (present perfect), a past date (simple past), by the time (past perfect)." },
+  { id: "parallel", group: "Form", title: "Parallel structure and word pairs",
+    summary: "Items in a list, or joined by and or but, must share the same form.",
+    rules: ["Keep list items parallel: noun, noun, and noun; -ing, -ing, and -ing; verb, verb, and verb.", "With infinitives, you need not repeat to: “to survey and analyze”.", "Fixed pairs: either…or, neither…nor, not only…but also, as…as, more/less…than.", "The two sides of a pair must match in form."],
+    examples: [["The course teaches students to read closely, write clearly and ^^speaking^^ confidently.", "The course teaches students to read closely, write clearly and ^^speak^^ confidently."], ["The trail is ^^either^^ closed ^^and^^ under repair.", "The trail is ^^either^^ closed ^^or^^ under repair."]],
+    trick: "Find the odd one out. If three items are verbs and one is a noun, that one is wrong." },
+  { id: "modification", group: "Structure & sense", title: "Modifiers",
+    summary: "A descriptive phrase must sit next to the noun it describes.",
+    rules: ["When a phrase opens a sentence and is followed by a comma, the very next noun must be what the phrase describes. If not, the modifier dangles.", "Other modifiers belong right beside the thing they modify, or they describe the wrong noun."],
+    examples: [["Raised in Osaka, ^^the city’s food^^ shaped Chen’s cooking.", "Raised in Osaka, ^^Chen^^ was shaped by the city’s food."], ["The senator gave a speech to voters ^^wearing a red tie^^.", "^^Wearing a red tie,^^ the senator gave a speech to voters."]],
+    trick: "Ask who or what the opening phrase describes. The answer must be the first noun after the comma." },
+  { id: "comparisons", group: "Structure & sense", title: "Faulty comparisons",
+    summary: "Compare like with like: people to people, things to things.",
+    rules: ["Fix an illogical comparison with that of (singular), those of (plural), or an apostrophe (Rome’s).", "Use than, not then, in comparisons.", "Number, many and fewer go with plural nouns; amount, much and less go with singular nouns."],
+    examples: [["The climate of Lisbon is milder than ^^Berlin^^.", "The climate of Lisbon is milder than ^^that of Berlin^^."], ["Bats’ wings are thinner than ^^birds^^.", "Bats’ wings are thinner than ^^those of birds^^."]],
+    trick: "Name both things being compared. If one is “a climate” and the other is “a city”, it is faulty." },
+  { id: "transitions", group: "Structure & sense", title: "Transitions",
+    summary: "Transition questions test meaning, not grammar. State the relationship before you look at the choices.",
+    rules: ["Cross out the transition, then decide how the two ideas relate: similar, opposite or cause and effect.", "Continuers: and, also, furthermore, in addition, in fact, indeed, likewise, moreover, next, of course, similarly, subsequently, that is, then, finally, in conclusion.", "Contradictors: but, however, although, despite, even so, even though, in contrast, in spite of, instead, meanwhile, nevertheless, on the contrary, on the other hand, otherwise, rather, regardless, still, whereas, while, yet.", "Cause and effect: accordingly, as a result, as such, because, consequently, for, hence, since, so, therefore, thus.", "If two choices mean the same thing, both are out. A choice with no transition is often right."],
+    examples: [["Cars were banned downtown. ^^Moreover,^^ traffic fell by 30 percent.", "Cars were banned downtown. ^^As a result,^^ traffic fell by 30 percent."]],
+    trick: "Say the relationship out loud first (“this is the result of that”), then match it to a word." },
+];
+
+// Practice items per lesson: [wrong, right, why]. Used for the try-first test, the practice check and spaced review.
+const LESSON_QUIZ = {
+  "periods-semicolons": [["The festival ends Sunday, it starts again in May.", "The festival ends Sunday; it starts again in May.", "Two complete sentences need a period or semicolon. A comma alone is a comma splice."], ["The test was long, however, it was fair.", "The test was long; however, it was fair.", "A transition that opens a new clause follows a semicolon or period."]],
+  "colons-dashes": [["The recipe needs: eggs, flour and milk.", "The recipe needs three things: eggs, flour and milk.", "A colon must follow a complete sentence. “The recipe needs” cannot stand alone."], ["Everyone agreed on one thing, the deadline was too soon.", "Everyone agreed on one thing: the deadline was too soon.", "Before the colon is a full sentence, and what follows explains it. A comma would splice."]],
+  "comma-fanboys": [["The bakery opens at six, it sells out by nine.", "The bakery opens at six, and it sells out by nine.", "Two sentences need comma + FANBOYS, a period or a semicolon."], ["The pilot checked the gauges, and noted the time.", "The pilot checked the gauges and noted the time.", "The second part has no subject of its own, so there is no comma."]],
+  "dependent-clauses": [["When the bell rang students left the room.", "When the bell rang, students left the room.", "A comma follows an opening dependent clause."], ["Unless funding increases. The program will close.", "Unless funding increases, the program will close.", "“Unless funding increases” is a fragment. Attach it with a comma."]],
+  "nonessential": [["My neighbor, who plays violin practices daily.", "My neighbor, who plays violin, practices daily.", "Extra information needs a comma at both ends."], ["The report (published in May), changed policy.", "The report (published in May) changed policy.", "A comma after a closing parenthesis is almost always wrong."]],
+  "names-titles": [["Her only sister, Dana opened the shop.", "Her only sister, Dana, opened the shop.", "Dana is extra information, so it needs commas on both sides, never one."], ["Patients treated by surgeon, Dr. Okafor, recovered faster.", "Patients treated by surgeon Dr. Okafor recovered faster.", "Cross out the name: “treated by surgeon recovered faster” breaks, so the name is essential."]],
+  "comma-rules": [["The committee wants more parks, and better schools.", "The committee wants more parks and better schools.", "No comma between two items joined by and."], ["The team is proud of, its record.", "The team is proud of its record.", "No comma after a preposition."]],
+  "apostrophes": [["The two scientist’s lab is downtown.", "The two scientists’ lab is downtown.", "A regular plural owner takes the apostrophe after the s."], ["The committee announced it’s decision.", "The committee announced its decision.", "Its is possessive. It’s means it is."]],
+  "question-marks": [["The poll asks whether voters trust the media?", "The poll asks whether voters trust the media.", "An indirect question inside a statement ends with a period."], ["The key issue is this: what do voters want.", "The key issue is this: what do voters want?", "A direct question ends with a question mark."]],
+  "pronouns-nouns": [["Oak trees live for centuries, and it can grow 30 meters tall.", "Oak trees live for centuries, and they can grow 30 meters tall.", "Trees is plural, so the pronoun must be they."], ["The nurse to who I spoke was kind.", "The nurse to whom I spoke was kind.", "Whom follows a preposition."]],
+  "subject-verb": [["The key to the cabinets are missing.", "The key to the cabinets is missing.", "The subject is key (singular). Cabinets sits inside a prepositional phrase."], ["Each of the runners were tired.", "Each of the runners was tired.", "Each is singular."]],
+  "verb-tense": [["Marie Curie has won her first Nobel Prize in 1903.", "Marie Curie won her first Nobel Prize in 1903.", "A specific past date calls for the simple past."], ["The city is a port since the 1600s.", "The city has been a port since the 1600s.", "Since signals the present perfect."]],
+  "parallel": [["The coach praised her speed, strength and for being focused.", "The coach praised her speed, strength and focus.", "Keep list items parallel: noun, noun, noun."], ["The device not only saves time but also saving money.", "The device not only saves time but also saves money.", "Both sides of not only…but also must match in form."]],
+  "modification": [["Hoping to impress the judges, the trophy was polished twice.", "Hoping to impress the judges, the team polished the trophy twice.", "The opening phrase must describe the noun right after the comma. A trophy cannot hope."], ["Walking through the park, a fox surprised Lena.", "Walking through the park, Lena was surprised by a fox.", "Lena was the one walking, so Lena must come first."]],
+  "comparisons": [["The population of Tokyo is larger than Paris.", "The population of Tokyo is larger than that of Paris.", "Compare a population to a population, not to a city."], ["Owls’ eyes are bigger than hawks.", "Owls’ eyes are bigger than hawks’.", "Compare eyes to eyes. The apostrophe stands for “hawks’ eyes”."]],
+  "transitions": [["The road was repaired in March. Nevertheless, commuters now save twenty minutes.", "The road was repaired in March. As a result, commuters now save twenty minutes.", "The second idea is a result of the first, so it needs a cause-and-effect word."], ["The soup was salty. Likewise, the bread was sweet.", "The soup was salty. In contrast, the bread was sweet.", "The ideas oppose each other, so a contradictor is needed."]],
+};
+
+// Spaced review: a lesson moves up a box each time you pass it, and drops back to box 1 when you miss.
+const DAY_MS = 86400000, BOX_DAYS = [0, 1, 3, 7, 14, 30];
+const LESSONS_KEY2 = "vocabify_lessons_v2";
+function lessonsLoad() {
+  try { const r = JSON.parse(localStorage.getItem(LESSONS_KEY2)); if (r && typeof r === "object" && !Array.isArray(r)) return r; } catch (e) { /* fall through */ }
+  try { const o = JSON.parse(localStorage.getItem("vocabify_lessons_v1")); if (Array.isArray(o)) { const n = {}; o.forEach((id) => { n[id] = { box: 1, due: Date.now() }; }); return n; } } catch (e) { /* ignore */ }
+  return {};
+}
+function lessonsSave(st) { try { localStorage.setItem(LESSONS_KEY2, JSON.stringify(st)); } catch (e) { /* ignore quota errors */ } }
+const lessonDue = (s) => !!s && s.due <= Date.now();
+const lessonMastered = (s) => !!s && s.box >= 3;
+function lessonsSummary(st) {
+  const ids = GRAMMAR_LESSONS.map((l) => l.id);
+  return { total: ids.length, started: ids.filter((id) => st[id]).length, mastered: ids.filter((id) => lessonMastered(st[id])).length, dueIds: ids.filter((id) => lessonDue(st[id])) };
+}
+function lessonsApply(st, res, onlyKnown) {
+  const n = { ...st };
+  Object.keys(res).forEach((id) => {
+    if (onlyKnown && !n[id]) return;
+    const box = res[id].right === res[id].total ? Math.min((n[id] ? n[id].box : 0) + 1, 5) : 1;
+    n[id] = { box, due: Date.now() + BOX_DAYS[box] * DAY_MS };
+  });
+  return n;
+}
+function lessonItems(ids, limit) {
+  let items = [];
+  ids.forEach((id) => (LESSON_QUIZ[id] || []).forEach((q) => items.push({ lid: id, why: q[2], opts: shuffleArray([{ t: q[0], ok: false }, { t: q[1], ok: true }]) })));
+  items = shuffleArray(items);
+  return limit ? items.slice(0, limit) : items;
+}
+function lessonRich(s, cls) {
+  return s.split("^^").map((p, i) => (i % 2 ? <span key={i} className={cls}>{p}</span> : p));
+}
+
+function LessonsCard({ onOpen }) {
+  const S = lessonsSummary(lessonsLoad());
+  const label = !S.started ? "Start" : S.dueIds.length ? "Review " + S.dueIds.length + " due" : S.mastered < S.total ? "Continue" : "Review";
+  return (
+    <button onClick={onOpen} className="text-left rounded-2xl border border-slate-200 bg-white p-6 flex flex-col gap-4 hover:border-rose-400 hover:shadow-sm transition focus-ring">
+      <div className="flex items-start gap-4">
+        <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 bg-rose-50 text-rose-600"><IconBookOpen className="w-5 h-5" /></div>
+        <div className="min-w-0">
+          <p className="text-[11px] font-bold uppercase tracking-wider mb-0.5 text-rose-600">Rules and examples</p>
+          <p className="font-display font-bold text-slate-900 text-[17px] leading-snug">Grammar lessons</p>
+        </div>
+      </div>
+      <p className="text-sm text-slate-500 leading-relaxed">{S.total} lessons that quiz you before and after each rule, then bring it back on a spaced schedule.</p>
+      <div>
+        <div className="h-2 rounded-full bg-slate-100 overflow-hidden"><div className="h-full rounded-full bg-rose-500" style={{ width: Math.round((S.mastered / S.total) * 100) + "%" }} /></div>
+        <div className="flex items-center justify-between mt-2 text-xs text-slate-500">
+          <span className="tabular-nums">{S.mastered} / {S.total} mastered</span>
+          <span className="text-sm font-semibold text-blue-600">{label} &rarr;</span>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+// One question at a time with instant feedback. Calls onFinish({lessonId: {right, total}}).
+function LessonQuiz({ items, finishLabel, onFinish }) {
+  const [i, setI] = useState(0);
+  const [pick, setPick] = useState(null);
+  const [res, setRes] = useState({});
+  const it = items[i];
+  const last = i === items.length - 1;
+  function choose(k) {
+    if (pick !== null) return;
+    setPick(k);
+    setRes((r) => { const c = r[it.lid] || { right: 0, total: 0 }; return { ...r, [it.lid]: { right: c.right + (it.opts[k].ok ? 1 : 0), total: c.total + 1 } }; });
+  }
+  function next() { if (last) onFinish(res); else { setI(i + 1); setPick(null); } }
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-6 animate-in" key={i}>
+      <p className="text-sm text-slate-500 mb-1">Question {i + 1} of {items.length}</p>
+      <p className="font-display font-bold text-slate-900 mb-4">Which sentence is correct?</p>
+      <div className="space-y-3">
+        {it.opts.map((o, k) => {
+          const cls = pick === null ? "border-slate-200 hover:border-blue-400 hover:bg-blue-50/40" : o.ok ? "border-emerald-400 bg-emerald-50" : pick === k ? "border-rose-400 bg-rose-50" : "border-slate-200 opacity-60";
+          return (
+            <button key={k} onClick={() => choose(k)} disabled={pick !== null} className={classNames("btn-press focus-ring w-full text-left px-5 py-4 rounded-xl border font-serif text-[16px] leading-relaxed transition-colors", cls)}>
+              <span className="font-sans text-xs font-bold text-slate-400 mr-2">{k ? "B" : "A"}</span>{o.t}
+            </button>
+          );
+        })}
+      </div>
+      {pick !== null && (
+        <div className="mt-5 animate-in" aria-live="polite">
+          <p className={classNames("font-semibold mb-1", it.opts[pick].ok ? "text-emerald-700" : "text-rose-700")}>{it.opts[pick].ok ? "Correct." : "Not quite."}</p>
+          <p className="text-[15px] text-slate-600 leading-relaxed mb-4">{it.why}</p>
+          <button onClick={next} className="btn-press focus-ring inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 shadow-sm shadow-blue-600/30">
+            {last ? finishLabel : "Next"} <IconChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GrammarLessons({ onExit }) {
+  const [st, setSt] = useState(() => lessonsLoad());
+  const [openId, setOpenId] = useState(null);
+  const [step, setStep] = useState("pre"); // pre | learn | practice | result
+  const [quiz, setQuiz] = useState(null);
+  const [out, setOut] = useState(null);
+  const [shown, setShown] = useState([]);
+  const [rev, setRev] = useState(null); // {title, items, out}
+  useEffect(() => { lessonsSave(st); }, [st]);
+  const top = () => window.scrollTo({ top: 0 });
+  const S = lessonsSummary(st);
+  const idx = GRAMMAR_LESSONS.findIndex((l) => l.id === openId);
+  const lesson = GRAMMAR_LESSONS[idx];
+  const backBtn = (label, onClick) => (
+    <button onClick={onClick} className="btn-press focus-ring inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 hover:text-slate-800 rounded-lg px-2 py-1 -ml-2">
+      <IconChevronLeft className="w-4 h-4" /> {label}
+    </button>
+  );
+  const wrap = (children) => <div className="max-w-3xl mx-auto px-5 sm:px-8 py-10 animate-in">{children}</div>;
+  function openLesson(id) { setOpenId(id); setStep("pre"); setQuiz(lessonItems([id], 1)); setShown([]); setOut(null); top(); }
+  function startRev(title, items) { setRev({ title, items, out: null }); top(); }
+  const btnPrimary = "btn-press focus-ring inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 shadow-sm shadow-blue-600/30";
+  const btnPlain = "btn-press focus-ring inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-bold text-slate-700 hover:border-slate-400";
+
+  // ---------- Review / mixed practice ----------
+  if (rev) {
+    if (!rev.out) return wrap(<><div className="mb-6">{backBtn("All lessons", () => { setRev(null); top(); })}</div><h1 className="font-display font-extrabold text-[28px] letter-tighter text-slate-900 mb-6">{rev.title}</h1><LessonQuiz key="rev" items={rev.items} finishLabel="See results" onFinish={(res) => { setSt(lessonsApply(st, res, true)); setRev({ ...rev, out: res }); top(); }} /></>);
+    const right = Object.values(rev.out).reduce((s, r) => s + r.right, 0), total = Object.values(rev.out).reduce((s, r) => s + r.total, 0);
+    const missed = Object.keys(rev.out).filter((id) => rev.out[id].right < rev.out[id].total).map((id) => GRAMMAR_LESSONS.find((l) => l.id === id).title);
+    return wrap(<><h1 className="font-display font-extrabold text-[28px] letter-tighter text-slate-900 mb-2">{right} of {total} correct</h1>
+      <p className="text-slate-600 mb-6">{missed.length ? "Revisit: " + missed.join(", ") + ". These come back tomorrow." : "Every lesson you passed moves to a longer interval, so it returns later."}</p>
+      <button onClick={() => { setRev(null); top(); }} className={btnPrimary}>Back to lessons</button></>);
+  }
+
+  // ---------- Index ----------
+  if (!lesson) {
+    const groups = GRAMMAR_LESSONS.map((l) => l.group).filter((g, i, a) => a.indexOf(g) === i);
+    return wrap(<>
+      <div className="mb-6">{backBtn("Packages", onExit)}</div>
+      <h1 className="font-display font-extrabold text-[28px] sm:text-[32px] letter-tighter text-slate-900 mb-2">Grammar lessons</h1>
+      <p className="text-slate-500 text-[15px] mb-6">Each lesson has three steps: try a question first, learn the rule, then prove it. Lessons you pass come back for review after 1, 3, 7, 14 and 30 days. {S.mastered} of {S.total} mastered.</p>
+      <div className="flex flex-wrap gap-3 mb-8">
+        <button disabled={!S.dueIds.length} onClick={() => startRev("Review due lessons", lessonItems(S.dueIds))} className={classNames(btnPrimary, !S.dueIds.length && "opacity-50 pointer-events-none")}>{S.dueIds.length ? "Review " + S.dueIds.length + " due" : "Nothing due"}</button>
+        <button onClick={() => startRev("Mixed practice", lessonItems(GRAMMAR_LESSONS.map((l) => l.id), 10))} className={btnPlain}>Mixed practice (10 questions)</button>
+      </div>
+      {groups.map((g) => (
+        <section key={g} className="mb-8">
+          <h2 className="font-display font-bold text-lg text-slate-900 mb-3">{g}</h2>
+          <ul className="rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100 overflow-hidden">
+            {GRAMMAR_LESSONS.filter((l) => l.group === g).map((l) => {
+              const s = st[l.id];
+              return (
+                <li key={l.id}><button onClick={() => openLesson(l.id)} className="focus-ring w-full text-left px-5 py-4 flex items-center gap-4 hover:bg-slate-50 transition">
+                  <span className="min-w-0 flex-1"><span className="block font-semibold text-slate-900">{l.title}</span><span className="block text-sm text-slate-500">{l.summary}</span></span>
+                  <span className={classNames("text-xs font-semibold px-2.5 py-1 rounded-full shrink-0", lessonMastered(s) ? "status-mastered" : s ? "status-learning" : "status-new")}>{lessonDue(s) ? "Due" : lessonMastered(s) ? "Mastered" : s ? "Learning" : "New"}</span>
+                </button></li>);
+            })}
+          </ul>
+        </section>
+      ))}
+    </>);
+  }
+
+  // ---------- Lesson ----------
+  const next = GRAMMAR_LESSONS[idx + 1];
+  const steps = [["pre", "Try first"], ["learn", "Learn"], ["practice", "Practice"]];
+  const at = step === "result" ? 3 : steps.findIndex((s) => s[0] === step);
+  return wrap(<div key={lesson.id}>
+    <div className="mb-6">{backBtn("All lessons", () => { setOpenId(null); setQuiz(null); top(); })}</div>
+    <p className="text-sm font-semibold text-rose-600 mb-1">{lesson.group} &middot; Lesson {idx + 1} of {GRAMMAR_LESSONS.length}</p>
+    <h1 className="font-display font-extrabold text-[28px] sm:text-[32px] letter-tighter text-slate-900 mb-5">{lesson.title}</h1>
+    <ol className="flex gap-2 mb-8 text-sm font-semibold" aria-label="Lesson steps">
+      {steps.map((s, k) => <li key={s[0]} aria-current={k === at ? "step" : undefined} className={classNames("flex-1 rounded-lg px-3 py-2 text-center border", k === at ? "border-blue-600 bg-blue-50 text-blue-700" : k < at ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 text-slate-400")}>{k + 1}. {s[1]}</li>)}
+    </ol>
+
+    {step === "pre" && quiz && <>
+      <p className="text-slate-600 mb-4 leading-relaxed">Try one question before you read the rule. Guessing first makes the rule stick, even when you guess wrong.</p>
+      <LessonQuiz key="pre" items={quiz} finishLabel="Now learn the rule" onFinish={() => { setStep("learn"); setQuiz(null); top(); }} />
+    </>}
+
+    {step === "learn" && <>
+      <p className="text-slate-600 text-[16px] leading-relaxed mb-6">{lesson.summary}</p>
+      <h2 className="font-display font-bold text-lg text-slate-900 mb-3">The rule</h2>
+      <ul className="list-disc pl-5 space-y-2 text-[15px] text-slate-700 leading-relaxed mb-8">{lesson.rules.map((r, i) => <li key={i}>{r}</li>)}</ul>
+      <h2 className="font-display font-bold text-lg text-slate-900 mb-1">Worked examples</h2>
+      <p className="text-sm text-slate-500 mb-3">Fix each sentence in your head first, then reveal the answer and say why it works.</p>
+      <div className="space-y-4 mb-8">
+        {lesson.examples.map((ex, i) => (
+          <div key={i} className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+            <p className="px-5 py-3.5 bg-rose-50/60 font-serif text-[16px] text-slate-800 leading-relaxed"><span className="font-sans text-xs font-bold text-rose-700 mr-2">Wrong</span>{lessonRich(ex[0], "rounded px-0.5 bg-rose-100 text-rose-900 font-semibold")}</p>
+            {shown.includes(i)
+              ? <p className="px-5 py-3.5 bg-emerald-50/60 border-t border-slate-100 font-serif text-[16px] text-slate-800 leading-relaxed animate-in"><span className="font-sans text-xs font-bold text-emerald-700 mr-2">Right</span>{lessonRich(ex[1], "rounded px-0.5 bg-emerald-100 text-emerald-900 font-semibold")}</p>
+              : <button onClick={() => setShown((s) => [...s, i])} className="focus-ring w-full px-5 py-3 border-t border-slate-100 text-sm font-semibold text-blue-600 hover:bg-blue-50/40 text-left">Show the fix</button>}
+          </div>
+        ))}
+      </div>
+      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 mb-8"><p className="font-display font-bold text-amber-900 mb-1">Test trick</p><p className="text-[15px] text-amber-900/90 leading-relaxed">{lesson.trick}</p></div>
+      <button onClick={() => { setStep("practice"); setQuiz(lessonItems([lesson.id])); top(); }} className={btnPrimary}>Start practice <IconChevronRight className="w-4 h-4" /></button>
+    </>}
+
+    {step === "practice" && quiz && <>
+      <p className="text-slate-600 mb-4 leading-relaxed">Answer from memory. Pass both to move this lesson up the review schedule.</p>
+      <LessonQuiz key="practice" items={quiz} finishLabel="See result" onFinish={(res) => { setSt(lessonsApply(st, res)); setOut(res[lesson.id]); setStep("result"); setQuiz(null); top(); }} />
+    </>}
+
+    {step === "result" && out && <div className="rounded-2xl border border-slate-200 bg-white p-6">
+      <p className="font-display font-extrabold text-2xl text-slate-900 mb-1">{out.right} of {out.total} correct</p>
+      <p className="text-slate-600 mb-6">{out.right === out.total ? "Passed. This lesson comes back for review in " + BOX_DAYS[st[lesson.id].box] + (BOX_DAYS[st[lesson.id].box] === 1 ? " day." : " days.") : "Re-read the rule and try again. A missed lesson returns for review tomorrow."}</p>
+      <div className="flex flex-wrap gap-3">
+        {out.right < out.total && <button onClick={() => { setStep("learn"); top(); }} className={btnPrimary}>Re-read the rule</button>}
+        <button onClick={() => { setStep("practice"); setQuiz(lessonItems([lesson.id])); top(); }} className={out.right < out.total ? btnPlain : btnPlain}>Practice again</button>
+        {next ? <button onClick={() => openLesson(next.id)} className={out.right === out.total ? btnPrimary : btnPlain}>Next lesson</button> : <button onClick={() => { setOpenId(null); top(); }} className={btnPrimary}>All lessons</button>}
+      </div>
+    </div>}
+  </div>);
+}
+
 function App() {
   const [view, setView] = useState({ screen: "dashboard" });
   const [progress, setProgress] = useState(() => loadProgress());
@@ -4506,6 +4829,7 @@ function App() {
   function openGrammar() { setView({ screen: "grammar" }); window.scrollTo({top:0}); }
   function openNotes() { setView({ screen: "notes" }); window.scrollTo({top:0}); }
   function openTransitions() { setView({ screen: "transitions" }); window.scrollTo({top:0}); }
+  function openLessons() { setView({ screen: "lessons" }); window.scrollTo({top:0}); }
   function openReels() { setView({ screen: "reels" }); window.scrollTo({top:0}); }
   function openBattle() { setView({ screen: "battle" }); window.scrollTo({top:0}); }
   function openPackage(pkgId) { setView({ screen: "setlist", pkgId }); window.scrollTo({top:0}); }
@@ -4531,6 +4855,12 @@ function App() {
     breadcrumbs = [
       { label: "Packages", onClick: goDashboard },
       { label: "Notes: Rhetorical Synthesis", onClick: null },
+    ];
+  }
+  if (view.screen === "lessons") {
+    breadcrumbs = [
+      { label: "Packages", onClick: goDashboard },
+      { label: "Grammar lessons", onClick: null },
     ];
   }
   if (view.screen === "transitions") {
@@ -4584,7 +4914,7 @@ function App() {
       <Header onLogoClick={goDashboard} breadcrumbs={breadcrumbs} />
 
       {view.screen === "dashboard" && (
-        <Dashboard data={RAW_DATA} progress={progress} onOpenPackage={openPackage} onOpenMock={openMock} onOpenReading={openReading} onOpenGrammar={openGrammar} onOpenNotes={openNotes} onOpenTransitions={openTransitions} onOpenBattle={openBattle} onOpenReels={openReels} onReview={startReview} />
+        <Dashboard data={RAW_DATA} progress={progress} onOpenPackage={openPackage} onOpenMock={openMock} onOpenReading={openReading} onOpenGrammar={openGrammar} onOpenNotes={openNotes} onOpenTransitions={openTransitions} onOpenLessons={openLessons} onOpenBattle={openBattle} onOpenReels={openReels} onReview={startReview} />
       )}
 
       {view.screen === "mock" && <MockExam onExit={goDashboard} />}
@@ -4593,6 +4923,7 @@ function App() {
       {view.screen === "grammar" && <GrammarPractice onExit={goDashboard} />}
       {view.screen === "notes" && <NotesPractice onExit={goDashboard} />}
       {view.screen === "transitions" && <TransitionsPractice onExit={goDashboard} />}
+      {view.screen === "lessons" && <GrammarLessons onExit={goDashboard} />}
 
       {view.screen === "battle" && <BattleArena onExit={goDashboard} />}
 
