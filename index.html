@@ -625,7 +625,7 @@ function PackageCard({ pkg, progress, onOpen, index }) {
   );
 }
 
-function Dashboard({ data, progress, onOpenPackage, onOpenMock, onOpenReading, onOpenGrammar, onOpenNotes, onOpenTransitions, onOpenLessons, onOpenBattle, onOpenReels, onReview }) {
+function Dashboard({ data, progress, onOpenPackage, onOpenMock, onOpenReading, onOpenGrammar, onOpenNotes, onOpenTransitions, onOpenLessons, onOpenStick, onOpenBattle, onOpenReels, onReview }) {
   const mockState = mockSummary();
   const reading = readingStats(readingLoad());
   const grammar = grammarStats(grammarLoad());
@@ -706,6 +706,17 @@ function Dashboard({ data, progress, onOpenPackage, onOpenMock, onOpenReading, o
           <p className="text-sm text-slate-500">{reading.total} real SAT questions with answer key, tips and timing.{reading.answered ? " " + reading.answered + " answered, " + reading.correct + " correct." : ""}</p>
         </div>
         <span className="text-sm font-semibold text-blue-600 shrink-0">{reading.answered && reading.answered < reading.total ? "Continue" : "Open"} &rarr;</span>
+      </button>
+
+      <button onClick={onOpenStick} className="mt-4 w-full text-left rounded-2xl border border-slate-200 bg-white p-6 flex items-center gap-4 hover:border-amber-400 hover:shadow-sm transition animate-in focus-ring">
+        <div className="w-11 h-11 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600 shrink-0">
+          <IconSwap className="w-5 h-5" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="font-display font-bold text-slate-900">Stick fight</p>
+          <p className="text-sm text-slate-500">Pick a weapon and fight stickman bots. First to three round wins.</p>
+        </div>
+        <span className="text-sm font-semibold text-blue-600 shrink-0">Play &rarr;</span>
       </button>
 
       <button onClick={onOpenBattle} className="mt-4 w-full text-left rounded-2xl border border-slate-200 bg-white p-6 flex items-center gap-4 hover:border-rose-400 hover:shadow-sm transition animate-in focus-ring">
@@ -4802,6 +4813,265 @@ function GrammarLessons({ onExit }) {
   </div>);
 }
 
+// ---------------------------------------------------------------------------
+// Stick fight: pick a weapon, fight stickman bots on a floating arena. First to 3 round wins.
+// ---------------------------------------------------------------------------
+const SF_WEAPONS = {
+  sword: { name: "Sword", kind: "melee", reach: 62, dmg: 12, cd: 22, kb: 5, color: "#64748b", desc: "Balanced and quick." },
+  spear: { name: "Spear", kind: "melee", reach: 92, dmg: 10, cd: 30, kb: 4, color: "#92400e", desc: "Longest reach. Stay out of range." },
+  hammer: { name: "Hammer", kind: "melee", reach: 54, dmg: 22, cd: 46, kb: 11, color: "#475569", desc: "Slow swing, huge knockback." },
+  bow: { name: "Bow", kind: "ranged", dmg: 14, cd: 38, speed: 9, grav: 0.12, color: "#15803d", desc: "Arrows arc, so aim ahead." },
+  pistol: { name: "Pistol", kind: "ranged", dmg: 7, cd: 14, speed: 14, grav: 0, color: "#1e293b", desc: "Fast shots, light damage." },
+};
+const SF_PLATS = [{ x: 70, y: 410, w: 660 }, { x: 120, y: 310, w: 160 }, { x: 520, y: 310, w: 160 }, { x: 320, y: 215, w: 160 }];
+const SF_COLORS = ["#2563eb", "#e11d48", "#d97706", "#7c3aed"];
+const SF_NAMES = ["You", "Rex", "Zed", "Mo"];
+const SF_SPAWN = [160, 640, 400, 280];
+const sfSign = (n) => (n < 0 ? -1 : 1);
+const sfRandWeapon = () => { const ids = Object.keys(SF_WEAPONS); return ids[Math.floor(Math.random() * ids.length)]; };
+
+function sfMake(i, weapon, human) {
+  return { i, human, name: SF_NAMES[i], color: SF_COLORS[i], weapon, wins: 0, x: 0, y: 0, vx: 0, vy: 0, hp: 100, face: 1, onGround: false, jumps: 2, jh: false, cd: 0, swing: 0, hit: true, stun: 0, flash: 0, t: 0, alive: true };
+}
+function sfReset(f) {
+  Object.assign(f, { x: SF_SPAWN[f.i], y: 380, vx: 0, vy: 0, hp: 100, face: f.i % 2 ? -1 : 1, onGround: false, jumps: 2, jh: false, cd: 0, swing: 0, hit: true, stun: 0, flash: 0, alive: true });
+}
+function sfNew(weapon, bots) {
+  const fs = [sfMake(0, weapon, true)];
+  for (let b = 1; b <= bots; b++) fs.push(sfMake(b, sfRandWeapon(), false));
+  fs.forEach(sfReset);
+  return { fs, proj: [], state: "fight", timer: 0, age: 0, round: 1, msg: "", over: null };
+}
+function sfHurt(o, dmg, kx) { o.hp -= dmg; o.vx += kx; o.vy = -4 - Math.abs(kx) * 0.3; o.stun = 10; o.flash = 8; o.swing = 0; }
+
+function sfAI(f, g) {
+  const inp = { l: false, r: false, jump: false, atk: false };
+  const foes = g.fs.filter((o) => o !== f && o.alive);
+  if (!foes.length) return inp;
+  let t = foes[0];
+  foes.forEach((o) => { if (Math.abs(o.x - f.x) < Math.abs(t.x - f.x)) t = o; });
+  const w = SF_WEAPONS[f.weapon], dx = t.x - f.x, dy = t.y - f.y, dist = Math.abs(dx);
+  const want = w.kind === "ranged" ? 250 : w.reach * 0.75;
+  let dir = 0;
+  if (dist > want + 20) dir = sfSign(dx); else if (w.kind === "ranged" && dist < want - 90) dir = -sfSign(dx);
+  const off = f.x < 70 || f.x > 730;
+  if (off) { dir = f.x < 70 ? 1 : -1; if (f.vy > 0 && f.y > 380 && f.jumps > 0 && Math.random() < 0.2) inp.jump = true; }
+  else if ((f.x < 95 && dir < 0) || (f.x > 705 && dir > 0)) dir = 0;
+  if (dir < 0) inp.l = true;
+  if (dir > 0) inp.r = true;
+  if (!dir && !off) f.face = sfSign(dx);
+  if (!off && ((dy < -60 && Math.random() < 0.04) || Math.random() < 0.004)) inp.jump = true;
+  if (f.face === sfSign(dx) && f.stun <= 0) {
+    if (w.kind === "ranged") { if (Math.abs(dy) < 60 && dist < 430 && Math.random() < 0.05) inp.atk = true; }
+    else if (dist < w.reach + 6 && Math.abs(dy) < 45 && Math.random() < 0.1) inp.atk = true;
+  }
+  return inp;
+}
+
+function sfStep(g, keys) {
+  const { fs, proj } = g;
+  fs.forEach((f) => {
+    if (!f.alive) return;
+    const inp = f.human ? keys : sfAI(f, g), w = SF_WEAPONS[f.weapon], py = f.y;
+    f.t++;
+    if (f.stun > 0) f.stun--;
+    if (f.flash > 0) f.flash--;
+    if (f.cd > 0) f.cd--;
+    const dir = f.stun > 0 ? 0 : (inp.r ? 1 : 0) - (inp.l ? 1 : 0);
+    if (dir) f.face = dir;
+    f.vx = (f.vx + dir * (f.onGround ? 0.45 : 0.25)) * (f.onGround ? 0.86 : 0.93);
+    if (inp.jump && !f.jh && f.jumps > 0 && f.stun <= 0) { f.vy = -11; f.jumps--; f.onGround = false; }
+    f.jh = !!inp.jump;
+    f.vy += 0.55; f.x += f.vx; f.y += f.vy; f.onGround = false;
+    SF_PLATS.forEach((p) => {
+      if (f.vy >= 0 && py <= p.y + 0.01 && f.y >= p.y && f.x >= p.x - 6 && f.x <= p.x + p.w + 6) { f.y = p.y; f.vy = 0; f.onGround = true; f.jumps = 2; }
+    });
+    if (inp.atk && f.cd <= 0 && f.stun <= 0) {
+      f.cd = w.cd;
+      if (w.kind === "melee") { f.swing = 14; f.hit = false; }
+      else { f.swing = 6; f.hit = true; proj.push({ x: f.x + f.face * 22, y: f.y - 28, vx: f.face * w.speed, vy: w.grav ? -1.2 : 0, grav: w.grav, dmg: w.dmg, own: f, life: 140 }); }
+    }
+    if (f.swing > 0) {
+      f.swing--;
+      if (!f.hit && f.swing <= 8) {
+        f.hit = true;
+        fs.forEach((o) => {
+          if (o === f || !o.alive) return;
+          const dx = (o.x - f.x) * f.face;
+          if (dx > -8 && dx < w.reach + 10 && Math.abs(o.y - f.y) < 44) sfHurt(o, w.dmg, f.face * w.kb);
+        });
+      }
+    }
+    if (f.hp <= 0 || f.y > 520 || f.x < -60 || f.x > 860) f.alive = false;
+  });
+  for (let i = proj.length - 1; i >= 0; i--) {
+    const p = proj[i];
+    p.vy += p.grav; p.x += p.vx; p.y += p.vy; p.life--;
+    let gone = p.life <= 0 || p.x < -20 || p.x > 820 || p.y > 480;
+    fs.forEach((o) => {
+      if (!gone && o !== p.own && o.alive && Math.abs(p.x - o.x) < 13 && p.y > o.y - 56 && p.y < o.y + 2) { sfHurt(o, p.dmg, sfSign(p.vx) * 3); gone = true; }
+    });
+    if (gone) proj.splice(i, 1);
+  }
+  if (g.state === "fight") {
+    g.age++;
+    const live = fs.filter((f) => f.alive);
+    if (live.length <= 1) {
+      const w = live[0];
+      if (w) w.wins++;
+      g.state = "end"; g.timer = 110;
+      g.msg = w ? (w.human ? "You win the round" : w.name + " wins the round") : "Draw";
+    }
+  } else if (--g.timer <= 0) {
+    const champ = fs.find((f) => f.wins >= 3);
+    if (champ) g.over = champ;
+    else { g.round++; g.state = "fight"; g.age = 0; proj.length = 0; fs.forEach((f) => { sfReset(f); if (!f.human) f.weapon = sfRandWeapon(); }); }
+  }
+}
+
+function sfFigure(ctx, f) {
+  const w = SF_WEAPONS[f.weapon], x = f.x, y = f.y, d = f.face;
+  const run = f.onGround && Math.abs(f.vx) > 0.8 ? Math.sin(f.t * 0.4) : 0, lk = f.onGround ? run * 9 : 8;
+  ctx.lineCap = "round"; ctx.lineWidth = 4;
+  ctx.strokeStyle = ctx.fillStyle = f.flash > 0 ? "#ef4444" : f.color;
+  ctx.beginPath(); ctx.arc(x, y - 46, 8, 0, 7); ctx.stroke();
+  const p = f.swing > 0 ? 1 - f.swing / 14 : 0;
+  const hx = x + d * 12 - (f.hit && f.swing > 0 && w.kind === "ranged" ? d * 3 : 0), hy = y - 28;
+  ctx.beginPath();
+  ctx.moveTo(x, y - 38); ctx.lineTo(x, y - 18);
+  ctx.moveTo(x, y - 18); ctx.lineTo(x - 7 + lk, y);
+  ctx.moveTo(x, y - 18); ctx.lineTo(x + 7 - lk, y);
+  ctx.moveTo(x, y - 34); ctx.lineTo(hx, hy);
+  ctx.stroke();
+  ctx.strokeStyle = ctx.fillStyle = w.color; ctx.lineWidth = 3;
+  ctx.beginPath();
+  if (w.kind === "melee") {
+    const spear = f.weapon === "spear", L = spear ? 70 : f.weapon === "hammer" ? 38 : 40;
+    const a = spear ? -0.25 : f.swing > 0 ? -1.4 + p * 2.4 : -0.6, tx = spear && f.swing > 0 ? Math.sin(p * Math.PI) * 20 * d : 0;
+    const ex = hx + tx + Math.cos(a) * L * d, ey = hy + Math.sin(a) * L;
+    ctx.moveTo(hx + tx, hy); ctx.lineTo(ex, ey); ctx.stroke();
+    if (f.weapon !== "sword") { ctx.beginPath(); ctx.arc(ex, ey, spear ? 3 : 7, 0, 7); ctx.fill(); }
+  } else if (f.weapon === "bow") {
+    ctx.moveTo(hx, hy - 15); ctx.quadraticCurveTo(hx + d * 16, hy, hx, hy + 15); ctx.stroke();
+    ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(hx, hy - 15); ctx.lineTo(hx, hy + 15); ctx.stroke();
+  } else {
+    ctx.lineWidth = 6; ctx.moveTo(hx, hy); ctx.lineTo(hx + d * 16, hy - 1); ctx.stroke();
+  }
+}
+
+function sfDraw(ctx, g) {
+  ctx.fillStyle = "#f1f5f9"; ctx.fillRect(0, 0, 800, 450);
+  SF_PLATS.forEach((p, k) => { ctx.fillStyle = "#334155"; ctx.fillRect(p.x, p.y, p.w, k ? 8 : 40); });
+  g.fs.forEach((f) => { if (f.alive) sfFigure(ctx, f); });
+  ctx.strokeStyle = "#0f172a"; ctx.lineWidth = 3; ctx.lineCap = "round";
+  g.proj.forEach((p) => { ctx.beginPath(); ctx.moveTo(p.x - Math.sign(p.vx) * 10, p.y - p.vy); ctx.lineTo(p.x, p.y); ctx.stroke(); });
+  ctx.font = "600 12px Inter, sans-serif"; ctx.textAlign = "left";
+  g.fs.forEach((f, k) => {
+    const bx = 16 + k * 196;
+    ctx.fillStyle = "#0f172a"; ctx.fillText(f.name + ": " + SF_WEAPONS[f.weapon].name, bx, 18);
+    ctx.fillStyle = "#cbd5e1"; ctx.fillRect(bx, 24, 170, 8);
+    ctx.fillStyle = f.color; ctx.fillRect(bx, 24, 170 * Math.max(0, f.hp) / 100, 8);
+    for (let j = 0; j < 3; j++) { ctx.fillStyle = j < f.wins ? f.color : "#cbd5e1"; ctx.beginPath(); ctx.arc(bx + 6 + j * 14, 46, 4, 0, 7); ctx.fill(); }
+  });
+  const msg = g.state === "end" ? g.msg : g.age < 70 ? "Round " + g.round : "";
+  if (msg) { ctx.font = "800 34px Lexend, Inter, sans-serif"; ctx.textAlign = "center"; ctx.fillStyle = "#0f172a"; ctx.fillText(msg, 400, 140); }
+}
+function StickFight({ onExit }) {
+  const [phase, setPhase] = useState("menu"); // menu | play | over
+  const [weapon, setWeapon] = useState("sword");
+  const [bots, setBots] = useState(2);
+  const [won, setWon] = useState(false);
+  const cv = useRef(null);
+  const keys = useRef({ l: false, r: false, jump: false, atk: false });
+
+  useEffect(() => {
+    if (phase !== "play") return;
+    const canvas = cv.current, ctx = canvas.getContext("2d"), dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = 800 * dpr; canvas.height = 450 * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const g = sfNew(weapon, bots), K = keys.current;
+    const map = { ArrowLeft: "l", a: "l", A: "l", ArrowRight: "r", d: "r", D: "r", ArrowUp: "jump", w: "jump", W: "jump", " ": "atk", j: "atk", J: "atk" };
+    const onKey = (v) => (e) => { const k = map[e.key]; if (!k) return; e.preventDefault(); K[k] = v; };
+    const kd = onKey(true), ku = onKey(false);
+    window.addEventListener("keydown", kd); window.addEventListener("keyup", ku);
+    let raf, last = performance.now(), acc = 0;
+    const loop = (now) => {
+      acc += Math.min(now - last, 100); last = now;
+      while (acc >= 1000 / 60) { sfStep(g, K); acc -= 1000 / 60; }
+      sfDraw(ctx, g);
+      if (g.over) { setWon(!!g.over.human); setPhase("over"); return; }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => { cancelAnimationFrame(raf); window.removeEventListener("keydown", kd); window.removeEventListener("keyup", ku); K.l = K.r = K.jump = K.atk = false; };
+  }, [phase, weapon, bots]);
+
+  const backBtn = (label, onClick) => (
+    <button onClick={onClick} className="btn-press focus-ring inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 hover:text-slate-800 rounded-lg px-2 py-1 -ml-2">
+      <IconChevronLeft className="w-4 h-4" /> {label}
+    </button>
+  );
+  const hold = (k) => { const off = () => { keys.current[k] = false; }; return { onPointerDown: (e) => { e.preventDefault(); keys.current[k] = true; }, onPointerUp: off, onPointerLeave: off, onPointerCancel: off, onContextMenu: (e) => e.preventDefault() }; };
+  const pad = "select-none touch-none rounded-2xl border border-slate-300 bg-white text-slate-700 font-bold text-lg py-4 active:bg-slate-100";
+  const primary = "btn-press focus-ring inline-flex items-center gap-1.5 px-6 py-3 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 shadow-sm shadow-blue-600/30";
+
+  if (phase === "play") return (
+    <div className="max-w-3xl mx-auto px-5 sm:px-8 py-8 animate-in">
+      <div className="mb-4">{backBtn("Quit match", () => setPhase("menu"))}</div>
+      <div className="rounded-2xl border border-slate-200 overflow-hidden bg-slate-100">
+        <canvas ref={cv} role="img" aria-label="Stick fight arena" style={{ width: "100%", height: "auto", aspectRatio: "16 / 9", display: "block" }} />
+      </div>
+      <p className="hidden md:block text-xs text-slate-400 text-center mt-3">
+        <span className="kbd">A</span> <span className="kbd">D</span> or <span className="kbd">&larr;</span> <span className="kbd">&rarr;</span> move, <span className="kbd">W</span> or <span className="kbd">&uarr;</span> jump (twice in the air), <span className="kbd">Space</span> attack.
+      </p>
+      <div className="md:hidden grid grid-cols-4 gap-2 mt-4">
+        <button {...hold("l")} className={pad} aria-label="Move left">&larr;</button>
+        <button {...hold("r")} className={pad} aria-label="Move right">&rarr;</button>
+        <button {...hold("jump")} className={pad}>Jump</button>
+        <button {...hold("atk")} className={classNames(pad, "bg-rose-50 border-rose-300 text-rose-700")}>Attack</button>
+      </div>
+    </div>
+  );
+
+  if (phase === "over") return (
+    <div className="max-w-xl mx-auto px-5 sm:px-8 py-16 text-center animate-in">
+      <h1 className="font-display font-extrabold text-[32px] letter-tighter text-slate-900 mb-2">{won ? "You won the match" : "You lost the match"}</h1>
+      <p className="text-slate-500 mb-8">{won ? "Last stickman standing, three times." : "A bot took three rounds first. Try a different weapon."}</p>
+      <div className="flex justify-center gap-3">
+        <button onClick={() => setPhase("play")} className={primary}>Fight again</button>
+        <button onClick={() => setPhase("menu")} className="btn-press focus-ring px-6 py-3 rounded-xl border border-slate-200 bg-white text-sm font-bold text-slate-700 hover:border-slate-400">Change weapon</button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="max-w-3xl mx-auto px-5 sm:px-8 py-10 animate-in">
+      <div className="mb-6">{backBtn("Packages", onExit)}</div>
+      <h1 className="font-display font-extrabold text-[28px] sm:text-[32px] letter-tighter text-slate-900 mb-2">Stick fight</h1>
+      <p className="text-slate-500 text-[15px] mb-8">Pick a weapon, then knock the bots off the arena or drain their health. First to win 3 rounds takes the match. Bots pick random weapons each round.</p>
+      <h2 className="font-display font-bold text-lg text-slate-900 mb-3">Your weapon</h2>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-8" role="radiogroup" aria-label="Weapon">
+        {Object.keys(SF_WEAPONS).map((id) => {
+          const w = SF_WEAPONS[id], on = id === weapon;
+          return (
+            <button key={id} role="radio" aria-checked={on} onClick={() => setWeapon(id)} className={classNames("focus-ring text-left rounded-2xl border p-4 transition", on ? "border-blue-600 bg-blue-50 ring-1 ring-blue-600" : "border-slate-200 bg-white hover:border-slate-400")}>
+              <p className="font-display font-bold text-slate-900">{w.name}</p>
+              <p className="text-xs font-semibold text-slate-400 mb-1">{w.kind === "melee" ? "Close range" : "Ranged"}</p>
+              <p className="text-sm text-slate-500 leading-snug">{w.desc}</p>
+            </button>
+          );
+        })}
+      </div>
+      <h2 className="font-display font-bold text-lg text-slate-900 mb-3">Opponents</h2>
+      <div className="flex gap-2 mb-8" role="radiogroup" aria-label="Number of opponents">
+        {[1, 2, 3].map((n) => (
+          <button key={n} role="radio" aria-checked={bots === n} onClick={() => setBots(n)} className={classNames("focus-ring px-5 py-2.5 rounded-xl border text-sm font-bold transition", bots === n ? "border-blue-600 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-400")}>{n} {n === 1 ? "bot" : "bots"}</button>
+        ))}
+      </div>
+      <button onClick={() => setPhase("play")} className={primary}>Start fight <IconChevronRight className="w-4 h-4" /></button>
+    </div>
+  );
+}
+
 function App() {
   const [view, setView] = useState({ screen: "dashboard" });
   const [progress, setProgress] = useState(() => loadProgress());
@@ -4829,6 +5099,7 @@ function App() {
   function openGrammar() { setView({ screen: "grammar" }); window.scrollTo({top:0}); }
   function openNotes() { setView({ screen: "notes" }); window.scrollTo({top:0}); }
   function openTransitions() { setView({ screen: "transitions" }); window.scrollTo({top:0}); }
+  function openStick() { setView({ screen: "stick" }); window.scrollTo({top:0}); }
   function openLessons() { setView({ screen: "lessons" }); window.scrollTo({top:0}); }
   function openReels() { setView({ screen: "reels" }); window.scrollTo({top:0}); }
   function openBattle() { setView({ screen: "battle" }); window.scrollTo({top:0}); }
@@ -4855,6 +5126,12 @@ function App() {
     breadcrumbs = [
       { label: "Packages", onClick: goDashboard },
       { label: "Notes: Rhetorical Synthesis", onClick: null },
+    ];
+  }
+  if (view.screen === "stick") {
+    breadcrumbs = [
+      { label: "Packages", onClick: goDashboard },
+      { label: "Stick fight", onClick: null },
     ];
   }
   if (view.screen === "lessons") {
@@ -4914,7 +5191,7 @@ function App() {
       <Header onLogoClick={goDashboard} breadcrumbs={breadcrumbs} />
 
       {view.screen === "dashboard" && (
-        <Dashboard data={RAW_DATA} progress={progress} onOpenPackage={openPackage} onOpenMock={openMock} onOpenReading={openReading} onOpenGrammar={openGrammar} onOpenNotes={openNotes} onOpenTransitions={openTransitions} onOpenLessons={openLessons} onOpenBattle={openBattle} onOpenReels={openReels} onReview={startReview} />
+        <Dashboard data={RAW_DATA} progress={progress} onOpenPackage={openPackage} onOpenMock={openMock} onOpenReading={openReading} onOpenGrammar={openGrammar} onOpenNotes={openNotes} onOpenTransitions={openTransitions} onOpenLessons={openLessons} onOpenStick={openStick} onOpenBattle={openBattle} onOpenReels={openReels} onReview={startReview} />
       )}
 
       {view.screen === "mock" && <MockExam onExit={goDashboard} />}
@@ -4924,6 +5201,7 @@ function App() {
       {view.screen === "notes" && <NotesPractice onExit={goDashboard} />}
       {view.screen === "transitions" && <TransitionsPractice onExit={goDashboard} />}
       {view.screen === "lessons" && <GrammarLessons onExit={goDashboard} />}
+      {view.screen === "stick" && <StickFight onExit={goDashboard} />}
 
       {view.screen === "battle" && <BattleArena onExit={goDashboard} />}
 
